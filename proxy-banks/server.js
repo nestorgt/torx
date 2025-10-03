@@ -259,6 +259,15 @@ app.post("/_echo", (req, res) => {
 
 app.get("/healthz", (_req, res) => res.send("ok"));
 
+/* Health endpoint for Google Apps Script compatibility */
+app.get("/health", (req, res) => {
+  res.status(200).json({
+    status: "ok",
+    timestamp: new Date().toISOString(),
+    message: "Proxy server is healthy"
+  });
+});
+
 /* Root captura ?code=... para OAuth Revolut */
 app.get("/", async (req, res) => {
   const code = (req.query.code || "").trim();
@@ -3045,9 +3054,16 @@ app.post('/incoming-sms', async (req, res) => {
     res.status(200).send('OK');
     
   } catch (error) {
-    console.error('[ERROR] Incoming SMS handling failed:', error.message);
-    res.status(500).send('Error handling SMS');
+    console.log(dump_server_cleanup(req), res, null);
+    res.status(502).json({ error: "incoming_sms_error", detail: error.reason || error.message, status: error.response?.status || 500 });
   }
 });
 
+// Start the server
+const PORT_NUM = 3001;
+app.listen(PORT_NUM, () => {
+  console.log(`🚀 Proxy server running on port ${PORT_NUM}`);
+  console.log(`Health check: http://localhost:${PORT_NUM}/health`);
+  console.log(`Health check (alternative): http://localhost:${PORT_NUM}/healthz`);
+});
 
