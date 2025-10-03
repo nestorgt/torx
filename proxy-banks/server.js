@@ -228,7 +228,10 @@ async function fetchRevolutAccounts() {
 
 /* ===================== Auth helper para el proxy ===================== */
 function checkProxyAuth(req, res) {
-  const presented = String(req.get("x-proxy-token") || req.query.token || "").trim();
+  // Support both x-proxy-token header and Authorization Bearer token
+  const authHeader = req.get("Authorization") || "";
+  const bearerToken = authHeader.startsWith("Bearer ") ? authHeader.substring(7).trim() : "";
+  const presented = String(req.get("x-proxy-token") || bearerToken || req.query.token || "").trim();
   const expected  = String(PROXY_TOKEN || "").trim();
   if (!expected) {
     console.error("[AUTH] PROXY_TOKEN vacío en el servidor");
