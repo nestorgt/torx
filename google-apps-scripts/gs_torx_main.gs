@@ -1176,7 +1176,7 @@ function updateAllBalances() {
   try {
     Logger.log('=== STARTING BALANCE UPDATE ===');
     
-    var sh = payoutsSheet_();
+    var sh = sheet_(SHEET_NAME);
     if (!sh) {
       throw new Error('Payouts sheet not found');
     }
