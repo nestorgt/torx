@@ -213,37 +213,44 @@ function revolutTransferBetweenAccounts_(fromName, toName, currency, amount, ref
 function getMercuryAccounts_() {
   try {
     // Try different possible Mercury endpoints
-    var endpoints = ['/mercury/accounts', '/mercury/balance', '/mercury/summary'];
+    var endpoints = ['/mercury/accounts', '/mercury/summary'];
     
     for (var i = 0; i < endpoints.length; i++) {
       try {
         Logger.log('[MERCURY] Testing endpoint: %s', endpoints[i]);
         var response = httpProxyJson_(endpoints[i]);
         Logger.log('[MERCURY] ✅ SUCCESS with endpoint %s', endpoints[i]);
-        // Handle different response formats
-        if (Array.isArray(response)) {
-          return response;
+        
+        // Handle Mercury accounts endpoint returning individual accounts
+        if (Array.isArray(response.accounts) && endpoints[i] === '/mercury/accounts') {
+          Logger.log('[MERCURY] Found %s individual Mercury accounts', response.accounts.length);
+          return response.accounts;
         }
         
         // Handle Mercury summary format: {"USD":9962.15,"EUR":0,"count":9}
-        Logger.log('[MERCURY] Processing summary response: %s', JSON.stringify(response));
-        
-        if (response.USD && typeof response.USD === 'number' && response.USD > 0) {
+        if (response.USD && typeof response.USD === 'number' && response.USD >= 0) {
           var totalUsd = response.USD;
           var accountCount = response.count || 1;
           
-          Logger.log('[MERCURY] Found $%s USD in Mercury Main account (count: %s) - no consolidation needed', totalUsd, accountCount);
+          Logger.log('[MERCURY] Summary shows $%s USD across %s accounts', totalUsd, accountCount);
           
-          // Mercury summary represents Main account balance – no consolidation needed
-          return [{ 
-            name: 'Main', 
-            balance: totalUsd, 
-            currency: 'USD', 
-            id: 'mercury-main',
-            summary: response,
-            accountCount: accountCount,
-            note: 'Main account balance from ' + accountCount + ' sources'
-          }];
+          // For fund consolidation purposes, treat summary as Main account
+          // Individual accounts would require /mercury/accounts endpoint
+          if (totalUsd > 0) {
+            Logger.log('[MERCURY] Treating summary as Main account - individual accounts not accessible for consolidation');
+            return [{ 
+              name: 'Main', 
+              balance: totalUsd, 
+              currency: 'USD', 
+              id: 'mercury-main',
+              summary: response,
+              accountCount: accountCount,
+              note: 'Main account balance from ' + accountCount + ' sources'
+            }];
+          } else {
+            Logger.log('[MERCURY] No USD funds found - no consolidation needed');
+            return [];
+          }
         }
         
         // For other non-array responses, wrap in array
@@ -1204,13 +1211,15 @@ function testMercuryApiDiscovery() {
   try {
     Logger.log('[MERCURY_TEST] Starting Mercury API discovery...');
     
-    // Test various Mercury endpoints
+    // Test various Mercury endpoints (including new transfer endpoints)
     var endpointsToTest = [
       '/mercury/',
       '/mercury/accounts',
       '/mercury/balance',
       '/mercury/summary', 
       '/mercury/transfer',
+      '/mercury/move',
+      '/mercury/consolidate',
       '/mercury/health',
       '/mercury/status'
     ];
