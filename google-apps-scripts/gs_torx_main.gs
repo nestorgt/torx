@@ -1369,7 +1369,7 @@ function selectMonthMenu() {
     ui.alert('Success', `Payments completed for ${monthDisplayName}!\\n\\n` +
       `Processed: ${result.totalUsers} users\\n` +
       `USD: $${result.totalPayoutUsd}\\n` +
-      `EUR: €${result.totalPayoutEur}`, ui.ButtonSet.OK);
+      'EUR: €' + result.totalPayoutEur + '', ui.ButtonSet.OK);
   }
 }
 
@@ -1405,7 +1405,7 @@ function selectMonthWithYear() {
     ui.alert('Success', `Payments completed for ${monthDisplayName}!\\n\\n` +
       `Processed: ${result.totalUsers} users\\n` +
       `USD: $${result.totalPayoutUsd}\\n` +
-      `EUR: €${result.totalPayoutEur}`, ui.ButtonSet.OK);
+      'EUR: €' + result.totalPayoutEur + '', ui.ButtonSet.OK);
   }
 }
 
@@ -1425,7 +1425,7 @@ function consolidateFundsMenu() {
         `Total processed: ${result.totalProcessed} accounts\\n` +
         `USD found: $${result.totalFound.toFixed(2)}\\n` +
         `USD moved: $${result.movedTotal.toFixed(2)}\\n` +
-        `Errors: ${result.errors.length}`;
+        'Errors: ' + result.errors.length;
       
       ui.alert('Success', message, ui.ButtonSet.OK);
       
@@ -1441,11 +1441,11 @@ function runTestFundConsolidation() {
     Logger.log('=== TESTING FUND CONSOLIDATION ===');
     var result = dryRunConsolidateFundsToMain();
     
-    var message = `Fund consolidation test completed!\\n\\n` +
-      `Total processed: ${result.totalProcessed} accounts\\n` +
-      `USD found: $${result.totalFound.toFixed(2)}\\n` +
-      `USD would move: $${result.movedTotal.toFixed(2)}\\n` +
-      `Errors: ${result.errors.length}`;
+    var message = 'Fund consolidation test completed!\\n\\n' +
+      'Total processed: ' + result.totalProcessed + ' accounts\\n' +
+      'USD found: $' + result.totalFound.toFixed(2) + '\\n' +
+      'USD would move: $' + result.movedTotal.toFixed(2) + '\\n' +
+      'Errors: ' + result.errors.length;
     
     SpreadsheetApp.getUi().alert('Test Results', message, SpreadsheetApp.getUi().ButtonSet.OK);
     
@@ -1525,11 +1525,11 @@ function testMercuryApiDiscovery() {
       }
     }
     
-    var message = `🔍 MERCURY API DISCOVERY RESULTS\\n\\n` +
-      `✅ Available endpoints: ${availableEndpoints.length}\\n` +
-      `❌ Failed endpoints: ${failedEndpoints.length}\\n\\n` +
-      `Available:\\n${availableEndpoints.slice(0, 3).join('\\n')}\\n${availableEndpoints.length > 3 ? '...' : ''}\\n\\n` +
-      `Failed:\\n${failedEndpoints.slice(0, 3).join('\\n')}\\n${failedEndpoints.length > 3 ? '...' : ''}`;
+    var message = '🔍 MERCURY API DISCOVERY RESULTS\\n\\n' +
+      '✅ Available endpoints: ' + availableEndpoints.length + '\\n' +
+      '❌ Failed endpoints: ' + failedEndpoints.length + '\\n\\n' +
+      'Available:\\n' + availableEndpoints.slice(0, 3).join('\\n') + '\\n' + (availableEndpoints.length > 3 ? '...' : '') + '\\n\\n' +
+      'Failed:\\n' + failedEndpoints.slice(0, 3).join('\\n') + '\\n' + (failedEndpoints.length > 3 ? '...' : '');
     
     SpreadsheetApp.getUi().alert('Mercury API Discovery', message, SpreadsheetApp.getUi().ButtonSet.OK);
     
@@ -1544,10 +1544,10 @@ function testDailyConsolidationTrigger() {
     Logger.log('=== TESTING DAILY CONSOLIDATION TRIGGER ===');
     var result = TRIGGER_consolidateUsdFundsToMainDaily();
     
-    var message = `🚀 DAILY CONSOLIDATION TRIGGER TEST\\n\\n` +
-      `Status: ${result.success ? '✅ Success' : '❌ Failed'}\\n` +
-      `Message: ${result.message}\\n` +
-      `Timestamp: ${result.timestamp}`;
+    var message = '🚀 DAILY CONSOLIDATION TRIGGER TEST\\n\\n' +
+      'Status: ' + (result.success ? '✅ Success' : '❌ Failed') + '\\n' +
+      'Message: ' + result.message + '\\n' +
+      'Timestamp: ' + result.timestamp;
     
     SpreadsheetApp.getUi().alert('Daily Trigger Test', message, SpreadsheetApp.getUi().ButtonSet.OK);
     
@@ -1676,11 +1676,11 @@ function testCompleteSystem() {
     
     SpreadsheetApp.getUi().alert('System Test', 
       'Unified System Test Results:\\n\\n' +
-      `Prerequisites: ${summary.prerequisites}\\n` +
-      `Consolidation: ${summary.consolidation}\\n` +
-      `Proxy: ${summary.pro xy}\\n` +
-      `Mercury: ${summary.mercury}\\n\\n` +
-      `All systems operational! 🚀`, 
+      'Prerequisites: ' + summary.prerequisites + '\\n' +
+      'Consolidation: ' + summary.consolidation + '\\n' +
+      'Proxy: ' + summary.proxy + '\\n' +
+      'Mercury: ' + summary.mercury + '\\n\\n' +
+      'All systems operational! 🚀', 
       SpreadsheetApp.getUi().ButtonSet.OK);
     
     return summary;
@@ -1726,12 +1726,12 @@ function getCurrentMonthStatus() {
       }
     }
     
-    var statusText = `📊 PAYMENT STATUS - ${monthStr}\\n\\n` +
-      `Active Users: ${activeUsers}\\n` +
-      `Paid Users: ${paidUsers}\\n` +
-      `Remaining: ${activeUsers - paidUsers}\\n` +
-      `Total Amount: €${totalAmount}\\n\\n` +
-      `Status: ${paidUsers === activeUsers ? '✅ All users paid' : '🔄 Pending payments'}`;
+    var statusText = '📊 PAYMENT STATUS - ' + monthStr + '\\n\\n' +
+      'Active Users: ' + activeUsers + '\\n' +
+      'Paid Users: ' + paidUsers + '\\n' +
+      'Remaining: ' + (activeUsers - paidUsers) + '\\n' +
+      'Total Amount: €' + totalAmount + '\\n\\n' +
+      'Status: ' + (paidUsers === activeUsers ? '✅ All users paid' : '🔄 Pending payments');
     
     SpreadsheetApp.getUi().alert('Payment Status', statusText, SpreadsheetApp.getUi().ButtonSet.OK);
     
@@ -1766,14 +1766,14 @@ function testSheetValidation() {
       var headerRow = usersSheet.getRange(1, 2, 1, lastColumn - 1).getValues()[0];
       var emptyColumns = headerRow.filter(function(val) { return !val || String(val).trim() === ''; });
       if (emptyColumns.length > 0) {
-        issues.push(`Empty user columns found: ${emptyColumns.length}`);
+        issues.push('Empty user columns found: ' + emptyColumns.length);
       }
     }
     
-    var message = `📊 SHEET VALIDATION RESULTS\\n\\n` +
-      `Sheet Structure: ${issues.length === 0 ? '✅ Valid' : '❌ Issues Found'}\\n` +
-      `Issues: ${issues.length}\\n\\n` +
-      `${issues.length === 0 ? 'All checks passed!' : issues.join('\\n')}`;
+    var message = '📊 SHEET VALIDATION RESULTS\\n\\n' +
+      'Sheet Structure: ' + (issues.length === 0 ? '✅ Valid' : '❌ Issues Found') + '\\n' +
+      'Issues: ' + issues.length + '\\n\\n' +
+      (issues.length === 0 ? 'All checks passed!' : issues.join('\\n'));
     
     SpreadsheetApp.getUi().alert('Sheet Validation', message, SpreadsheetApp.getUi().ButtonSet.OK);
     
@@ -1800,12 +1800,12 @@ function testPaymentSystem() {
     var validMonths = ['12-2025', '01-2026'].map(validateMonthString);
     var invalidMonths = ['13-2025', '00-2025'].map(function(m) { return validateMonthString(m); });
     
-    var message = `🧪 PAYMENT SYSTEM TEST RESULTS\\n\\n` +
-      `Prerequisites: ${prereqs.allGood ? '✅ PASS' : '❌ FAIL'}\\n` +
-      `Currency Format: ${formattedEur ? '✅ PASS' : '❌ FAIL'}\\n` +
-      `Month Validation: ${validMonths[0] && validMonths[1] ? '✅ PASS' : '❌ FAIL'}\\n\\n` +
-      `Formatted EUR: ${formattedEur}\\n` +
-      `Formatted USD: ${formattedUsd}`;
+    var message = '🧪 PAYMENT SYSTEM TEST RESULTS\\n\\n' +
+      'Prerequisites: ' + (prereqs.allGood ? '✅ PASS' : '❌ FAIL') + '\\n' +
+      'Currency Format: ' + (formattedEur ? '✅ PASS' : '❌ FAIL') + '\\n' +
+      'Month Validation: ' + (validMonths[0] && validMonths[1] ? '✅ PASS' : '❌ FAIL') + '\\n\\n' +
+      'Formatted EUR: ' + formattedEur + '\\n' +
+      'Formatted USD: ' + formattedUsd;
     
     ui.alert('Payment System Test', message, ui.ButtonSet.OK);
     
