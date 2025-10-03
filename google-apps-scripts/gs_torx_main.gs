@@ -1131,7 +1131,7 @@ function sendPaymentNotification_(userName, monthStr, amount, requestId, phoneNu
 /* ======================================================================================================== */
 
 /* ============== Sheet Operations ============== */
-function setCellWith Note_(sheetName, a1, value, note) {
+function setCellWithNote_(sheetName, a1, value, note) {
   try {
     var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName);
     setCellKeepFmt_(sheet, a1, value, note);
@@ -1152,11 +1152,11 @@ function updateBankBalance_(sh, bankName, summary, note) {
     }
     
     if (summary.USD !== undefined) {
-      setCellKeepFmt_(sh, bankCells.USD, summary.USD, note || `${bankName} USD balance updated`);
+      setCellKeepFmt_(sh, bankCells.USD, summary.USD, note || bankName + ' USD balance updated');
     }
     
     if (summary.EUR !== undefined && bankCells.EUR) {
-      setCellKeepFmt_(sh, bankCells.EUR, summary.EUR, note || `${bankName} EUR balance updated`);
+      setCellKeepFmt_(sh, bankCells.EUR, summary.EUR, note || bankName + ' EUR balance updated');
     }
     
     // Update timestamp
@@ -1480,15 +1480,15 @@ function getBankAccountSummary() {
     }
     
     // Calculate totals
-    var totalUsd = summaries.revolut.USD + summaries.mercury.USD;
+    var totalUsd = summaries.revolut.USD + summaries.mercury.mainUsd;
     
-    var summaryText = `🏦 BANK ACCOUNT SUMMARY\\n\\n` +
-      `💵 TOTAL USD BALANCE: $${totalUsd.toFixed(2)}\\n\\n` +
-      `📱 Revolut: $${summaries.revolut.USD.toFixed(2)} USD, €${summaries.revolut.EUR.toFixed(2)} EUR\\n` +
-      `🏦 Mercury: $${summaries.mercury.mainUsd.toFixed(2)} USD (in Main)\\n\\n` +
-      `📊 Currency Distribution:\\n` +
-      `   USD: $${totalUsd.toFixed(2)}\\n` +
-      `   EUR: €${summaries.revolut.EUR.toFixed(2)}`;
+    var summaryText = '🏦 BANK ACCOUNT SUMMARY\\n\\n' +
+      '💵 TOTAL USD BALANCE: $' + totalUsd.toFixed(2) + '\\n\\n' +
+      '📱 Revolut: $' + summaries.revolut.USD.toFixed(2) + ' USD, €' + summaries.revolut.EUR.toFixed(2) + ' EUR\\n' +
+      '🏦 Mercury: $' + summaries.mercury.mainUsd.toFixed(2) + ' USD (in Main)\\n\\n' +
+      '📊 Currency Distribution:\\n' +
+      '   USD: $' + totalUsd.toFixed(2) + '\\n' +
+      '   EUR: €' + summaries.revolut.EUR.toFixed(2);
     
     ui.alert('Bank Account Summary', summaryText, ui.ButtonSet.OK);
     
