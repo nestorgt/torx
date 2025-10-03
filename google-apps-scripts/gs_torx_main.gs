@@ -334,7 +334,7 @@ function proxyIsUp_() {
         var startTime = new Date().getTime();
         var response = UrlFetchApp.fetch(proxyUrl + '/health', {
           method: 'GET',
-          headers: { 'Authorization': 'Bearer ' + proxyToken },
+          headers: { 'x-proxy-token': proxyToken },
           muteHttpExceptions: true,
           followRedirects: false,
           validateHttpsCertificates: true,
@@ -397,7 +397,7 @@ function httpProxyJson_(path) {
     var response = UrlFetchApp.fetch(fullUrl, {
       method: 'GET',
       headers: {
-        'Authorization': 'Bearer ' + proxyToken,
+        'x-proxy-token': proxyToken,
         'Accept': 'application/json',
         'User-Agent': 'GoogleAppsScript-Torx/1.0'
       },
@@ -459,7 +459,7 @@ function httpProxyPostJson_(path, body) {
     var response = UrlFetchApp.fetch(fullUrl, {
       method: 'POST',
       headers: {
-        'Authorization': 'Bearer ' + proxyToken,
+        'x-proxy-token': proxyToken,
         'Content-Type': 'application/json',
         'Accept': 'application/json',
         'User-Agent': 'GoogleAppsScript-Torx/1.0'
@@ -1615,6 +1615,21 @@ function TRIGGER_consolidateUsdFundsToMainDaily() {
       timestamp: new Date().toISOString(),
       message: 'Daily USD fund consolidation failed: ' + error.message
     };
+  }
+}
+
+/* ============== Payment Trigger Functions ============== */
+function TRIGGER_runPaymentsJuly2025() {
+  try {
+    Logger.log('[JULY 2025] Starting payment process...');
+    var result = payUsersForMonth('07-2025');
+    Logger.log('[SUCCESS] July 2025 payment process completed successfully!');
+    Logger.log('[SUCCESS] Check the logs above for payment details.');
+    return result;
+  } catch (error) {
+    var errorMsg = 'July 2025 failed: ' + error.message;
+    Logger.log('[ERROR] ' + errorMsg);
+    throw error;
   }
 }
 
