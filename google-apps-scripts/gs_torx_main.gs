@@ -1277,50 +1277,28 @@ function onOpen() {
   
   ui.createMenu('🏦 Banking')
     .addItem('💰 Update All Balances', 'updateAllBalances')
-    .addItem('📊 Test Balance System', 'testBalanceSystem')
+    .addItem('📊 Bank Account Summary', 'getBankAccountSummary')
     .addToUi();
     
-  ui.createMenu('💰 Payments')
-    .addItem('📅 November 2025', 'payUsersNovember2025')
-    .addItem('🎯 Pay Current Month', 'payUsersForCurrentMonth')
-    .addItem('🧪 Dry Run Current Month', 'dryRunPayUsersForCurrentMonth')
-    .addSeparator()
-    .addItem('📅 Select Month (Current Year)', 'selectMonthMenu')
-    .addItem('🗓️ Select Month & Year', 'selectMonthWithYear')
-    .addSeparator()
-    .addItem('🔍 Check Status', 'getCurrentMonthStatus')
+  ui.createMenu('🧪 System Tests')
     .addItem('📊 Validate Sheet', 'testSheetValidation')
-    .addItem('🧪 Test System', 'testPaymentSystem')
+    .addItem('🔍 Check Status', 'getCurrentMonthStatus')
+    .addItem('🧪 Test Payment System', 'testPaymentSystem')
+    .addItem('🚀 Complete System Test', 'testCompleteSystem')
     .addToUi();
     
   ui.createMenu('🔄 Consolidation')
     .addItem('💰 Consolidate Funds → Main', 'consolidateFundsMenu')
-    .addItem('🧪 Test Fund Consolidation', 'testFundConsolidation')
-    .addItem('📊 Bank Account Summary', 'getBankAccountSummary')
+    .addItem('🧪 Test Consolidation', 'runTestFundConsolidation')
     .addSeparator()
-    .addItem('🚀 Daily Consolidation Trigger', 'testDailyConsolidationTrigger')
-    .addItem('💰 Balance Update Trigger', 'testBalanceUpdateTrigger')
+    .addItem('🚀 Test Daily Consolidation Trigger', 'testDailyConsolidationTrigger')
+    .addItem('💰 Test Balance Update Trigger', 'testBalanceUpdateTrigger')
     .addItem('🔍 Mercury API Discovery', 'testMercuryApiDiscovery')
     .addToUi();
     
-  ui.createMenu('⚙️ System')
-    .addItem('🔧 Manage Triggers', 'manageTriggersMenu')
-    .addItem('📋 List All Triggers', 'listAllTriggers')
-    .addItem('🏥 Health Check', 'checkSystemHealth')
-    .addSeparator()
-    .addItem('📈 Create Auto Triggers', 'createAllAutoTriggers')
-    .addItem('🗑️ Delete All Triggers', 'deleteAllTriggers')
-    .addToUi();
 }
 
 /* ============== Menu Handler Functions ============== */
-function payUsersNovember2025() {
-  return runMenuHandler('Pay November 2025', function() {
-    var result = payUsersForMonth('11-2025');
-    SpreadsheetApp.getUi().alert('November 2025 Payments', 'Completed successfully!\\n\\nUsers: ' + result.totalUsers + '\\nUSD: $' + result.totalPayoutUsd + '\\nEUR: €' + result.totalPayoutEur, SpreadsheetApp.getUi().ButtonSet.OK);
-    return result;
-  });
-}
 
 function selectMonthMenu() {
   var ui = SpreadsheetApp.getUi();
