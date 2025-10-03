@@ -180,7 +180,7 @@ function setNoteOnly_(sh, a1, note) {
   try {
     note = safeErrorNote_(note) || note;
     var existingNote = sh.getRange(a1).getNote() || '';
-    note = existingNote ? `${existingNote}\n${nowStamp_()}: ${note}`}` : `${nowStamp_()}: ${note}`;
+    note = existingNote ? `${existingNote}\n${nowStamp_()}: ${note}` : `${nowStamp_()}: ${note}`;
     sh.getRange(a1).setNote(note);
   } catch (e) {
     Logger.log('[ERROR] setNoteOnly_ failed for %s: %s', a1, e.message);
