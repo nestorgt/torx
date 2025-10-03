@@ -114,11 +114,11 @@ var CURRENT_TIMEZONE = 'America/Montevideo';
 
 /* ============== Cell Mapping ============== */
 var CELLS = {
-  Airwallex: { USD: 'C2', EUR: 'C3' },
-  Mercury:   { USD: 'D2', EUR: 'D3' },
-  Revolut:   { USD: 'E2', EUR: 'E3' },
-  Wise:      { USD: 'F2', EUR: 'F3' },
-  Nexo:      { USD: 'G2' }             // USD-only
+  Airwallex: { USD: 'B2', EUR: 'B3' },
+  Mercury:   { USD: 'C2', EUR: 'C3' },
+  Revolut:   { USD: 'D2', EUR: 'D3' },
+  Wise:      { USD: 'E2', EUR: 'E3' },
+  Nexo:      { USD: 'F2' }             // USD-only
 };
 
 /* ============== Core Utilities ============== */
