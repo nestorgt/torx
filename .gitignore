@@ -1,0 +1,53 @@
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Build directories
+**/build/
+**/node_modules/
+**/dist/
+**/out/
+
+# Logs
+*.log
+**/logs/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary files
+*.tmp
+*.temp
+
+# Mac App specific
+mac-app/Torx.app/
+mac-app/build/
+
+# Proxy banks specific
+proxy-banks/.secrets/
+proxy-banks/server.pid
+proxy-banks/server.log
+proxy-banks/server_check.log
+proxy-banks/server_monitor.log
+proxy-banks/server_stdout.log
+proxy-banks/server_stderr.log
+proxy-banks/monitor_stdout.log
+proxy-banks/monitor_stderr.log
+proxy-banks/exports/
+proxy-banks/nexo-debug/
+
+# Google Apps Scripts
+google-apps-scripts/.clasp.json
