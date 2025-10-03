@@ -1299,6 +1299,7 @@ function onOpen() {
     .addItem('📊 Bank Account Summary', 'getBankAccountSummary')
     .addSeparator()
     .addItem('🚀 Daily Consolidation Trigger', 'testDailyConsolidationTrigger')
+    .addItem('💰 Balance Update Trigger', 'testBalanceUpdateTrigger')
     .addItem('🔍 Mercury API Discovery', 'testMercuryApiDiscovery')
     .addToUi();
     
@@ -1557,6 +1558,24 @@ function testDailyConsolidationTrigger() {
   }
 }
 
+function testBalanceUpdateTrigger() {
+  try {
+    Logger.log('=== TESTING BALANCE UPDATE TRIGGER ===');
+    var result = TRIGGER_updateAllBalances();
+    
+    var message = '💰 BALANCE UPDATE TRIGGER TEST\\n\\n' +
+      'Status: ' + (result.success ? '✅ Success' : '❌ Failed') + '\\n' +
+      'Message: ' + result.message + '\\n' +
+      'Timestamp: ' + result.timestamp;
+    
+    SpreadsheetApp.getUi().alert('Balance Update Trigger Test', message, SpreadsheetApp.getUi().ButtonSet.OK);
+    
+  } catch (e) {
+    Logger.log('[ERROR] Balance update trigger test failed: %s', e.message);
+    SpreadsheetApp.getUi().alert('Trigger Test Failed', 'Balance update trigger test failed: ' + e.message, SpreadsheetApp.getUi().ButtonSet.OK);
+  }
+}
+
 /* ============== Daily Trigger Functions ============== */
 function TRIGGER_consolidateUsdFundsToMainDaily() {
   Logger.log('=== DAILY USD FUND CONSOLIDATION TRIGGER ===');
@@ -1630,6 +1649,37 @@ function TRIGGER_runPaymentsJuly2025() {
     var errorMsg = 'July 2025 failed: ' + error.message;
     Logger.log('[ERROR] ' + errorMsg);
     throw error;
+  }
+}
+
+/* ============== Balance Update Trigger Functions ============== */
+function TRIGGER_updateAllBalances() {
+  Logger.log('=== AUTOMATIC BALANCE UPDATE TRIGGER ===');
+  Logger.log('[BALANCE_TRIGGER] Starting automatic balance update');
+  
+  try {
+    // Run the main balance update function
+    updateAllBalances();
+    
+    Logger.log('[BALANCE_TRIGGER] Balance update completed successfully');
+    Logger.log('[BALANCE_TRIGGER] All bank balances have been updated');
+    
+    return {
+      success: true,
+      timestamp: new Date().toISOString(),
+      message: 'Automatic balance update completed successfully'
+    };
+    
+  } catch (error) {
+    Logger.log('[BALANCE_TRIGGER] Balance update failed: %s', error.message);
+    Logger.log('[BALANCE_TRIGGER] Error stack: %s', error.stack);
+    
+    return {
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString(),
+      message: 'Automatic balance update failed: ' + error.message
+    };
   }
 }
 
