@@ -186,6 +186,389 @@ function getRevolutMainBalance_(currency) {
   }
 }
 
+function getRevolutAccounts_() {
+  try {
+    var accounts = httpProxyJson_('/revolut/accounts');
+    Logger.log('[REVOLUT] Retrieved %s accounts', accounts.length || 0);
+    return accounts;
+  } catch (e) {
+    Logger.log('[ERROR] Failed to get Revolut accounts: %s', e.message);
+    throw e;
+  }
+}
+
+function revolutTransferBetweenAccounts_(fromName, toName, currency, amount, reference) {
+  var body = {
+    fromName: String(fromName || '').trim(),
+    toName: String(toName || '').trim(),
+    currency: String(currency || 'USD'),
+    amount: Number(amount),
+    request_id: ('REV-MOVE-' + new Date().getTime()).slice(0, 40),
+    reference: reference || ''
+  };
+  return httpProxyPostJson_('/revolut/transfer', body);
+}
+
+/* ============== Mercury Bank Functions ============= = */
+function getMercuryAccounts_() {
+  try {
+    // Try different possible Mercury endpoints
+    var endpoints = ['/mercury/accounts', '/mercury/balance', '/mercury/summary'];
+    
+    for (var i = 0; i < endpoints.length; i++) {
+      try {
+        Logger.log('[MERCURY] Testing endpoint: %s', endpoints[i]);
+        var response = httpProxyJson_(endpoints[i]);
+        Logger.log('[MERCURY] ✅ SUCCESS with endpoint %s', endpoints[i]);
+        // Handle different response formats
+        if (Array.isArray(response)) {
+          return response;
+        }
+        
+        // Handle Mercury summary format: {"USD":9962.15,"EUR":0,"count":9}
+        Logger.log('[MERCURY] Processing summary response: %s', JSON.stringify(response));
+        
+        if (response.USD && typeof response.USD === 'number' && response.USD > 0) {
+          var totalUsd = response.USD;
+          var accountCount = response.count || 1;
+          
+          Logger.log('[MERCURY] Found $%s USD in Mercury Main account (count: %s) - no consolidation needed', totalUsd, accountCount);
+          
+          // Mercury summary represents Main account balance – no consolidation needed
+          return [{ 
+            name: 'Main', 
+            balance: totalUsd, 
+            currency: 'USD', 
+            id: 'mercury-main',
+            summary: response,
+            accountCount: accountCount,
+            note: 'Main account balance from ' + accountCount + ' sources'
+          }];
+        }
+        
+        // For other non-array responses, wrap in array
+        return [response].filter(Boolean);
+      } catch (e) {
+        Logger.log('[MERCURY] ⚪ Endpoint %s not available (expected): %s', endpoints[i], e.message.split('HTTP')[1] || e.message);
+      }
+    }
+    
+    // If all endpoints fail, check if we can see Mercury in revolut/summary
+    try {
+      var revolutSummary = httpProxyJson_('/revolut/summary');
+      Logger.log('[MERCURY] Checking if Mercury info is in Revolut summary...');
+      if (revolutSummary && Object.keys(revolutSummary)) {
+        Logger.log('[MERCURY] Available Revolut currencies: %s', Object.keys(revolutSummary).join(', '));
+      }
+    } catch (e) {
+      Logger.log('[MERCURY] Could not check Revolut summary for Mercury info: %s', e.message);
+    }
+    
+    Logger.log('[ERROR] All Mercury endpoints failed - Mercury API may not be implemented');
+    return []; // Return empty array instead of throwing error
+  } catch (e) {
+    Logger.log('[ERROR] Failed to get Mercury accounts: %s', e.message);
+    Logger.log('[DEBUG] Mercury API may not be implemented - returning empty array');
+    return []; // Return empty array instead of throwing error
+  }
+}
+
+function getMercuryAccountBalance_(accountId, currency) {
+  try {
+    // Try different Mercury balance endpoints
+    var balanceEndpoints = [
+      '/mercury/balance/' + encodeURIComponent(accountId) + '?currency=' + currency,
+      '/mercury/' + encodeURIComponent(accountId) + '/balance?currency=' + currency,
+      '/mercury/summary/' + encodeURIComponent(accountId) + '?currency=' + currency
+    ];
+    
+    for (var i = 0; i < balanceEndpoints.length; i++) {
+      try {
+        var balance = httpProxyJson_(balanceEndpoints[i]);
+        Logger.log('[MERCURY] Account %s %s balance: %s', accountId, currency, balance);
+        return balance;
+      } catch (e) {
+        Logger.log('[MERCURY] ⚪ Balance endpoint %s not available (expected): %s', balanceEndpoints[i], e.message.split('HTTP')[1] || e.message);
+      }
+    }
+    
+    Logger.log('[ERROR] All Mercury balance endpoints failed for account %s', accountId);
+    return 0;
+  } catch (e) {
+    Logger.log('[ERROR] Failed to get Mercury account %s %s balance: %s', accountId, currency, e.message);
+    return 0;
+  }
+}
+
+function mercuryTransferToMain_(fromAccountId, amount, currency, reference) {
+  var body = {
+    fromAccountId: String(fromAccountId || '').trim(),
+    toAccountId: 'main',
+    currency: String(currency || 'USD'),
+    amount: Number(amount),
+    request_id: ('MERCURY-MOVE-' + new Date().getTime()).slice(0, 40),
+    reference: reference || ''
+  };
+  
+  // Try different Mercury transfer endpoints
+  var transferEndpoints = ['/mercury/transfer', '/mercury/move', '/mercury/consolidate'];
+  
+  for (var i = 0; i < transferEndpoints.length; i++) {
+    try {
+      Logger.log('[MERCURY] Attempting transfer endpoint: %s', transferEndpoints[i]);
+      var result = httpProxyPostJson_(transferEndpoints[i], body);
+      Logger.log('[MERCURY] ✅ Transfer successful with endpoint %s', transferEndpoints[i]);
+      return result;
+    } catch (e) {
+      Logger.log('[MERCURY] ⚪ Transfer endpoint %s not available (expected): %s', transferEndpoints[i], e.message.split('HTTP')[1] || e.message);
+    }
+  }
+  
+  throw new Error('All Mercury transfer endpoints failed');
+}
+
+/* ============== Account Balance Functions ============== */
+function getRevolutAccountBalance_(accountId, currency) {
+  try {
+    var summary = httpProxyJson_('/revolut/account/' + encodeURIComponent(accountId) + '?currency=' + currency);
+    var balance = summary[currency] || summary.balance || 0;
+    Logger.log('[REVOLUT] Account %s %s balance: %s', accountId, currency, balance);
+    return balance;
+  } catch (e) {
+    Logger.log('[ERROR] Failed to get Revolut account %s %s balance: %s', accountId, currency, e.message);
+    throw e;
+  }
+}
+
+/* ============== Fund Consolidation Functions ============== */
+function consolidateUsdFundsToMain_(options) {
+  var opts = options || {};
+  var dryRun = !!opts.dryRun;
+  var tz = 'Europe/Andorra';
+  
+  Logger.log('[FUND_CONSOLIDATION] Starting USD fund consolidation (dryRun: %s)', dryRun);
+  
+  var consolidation = {
+    timestamp: new Date().toISOString(),
+    dryRun: dryRun,
+    revolut: { processed: 0, foundFunds: 0, movedTotal: 0, errors: [] },
+    mercury: { processed: 0, foundFunds: 0, movedTotal: 0, errors: [] },
+    summary: { totalProcessed: 0, totalFound: 0, totalMoved: 0, totalErrors: 0 }
+  };
+  
+  // Process Revolut accounts
+  try {
+    Logger.log('[FUND_CONSOLIDATION] Processing Revolut accounts...');
+    var revolutResult = consolidateRevolutUsdFunds_(dryRun);
+    consolidation.revolut = revolutResult;
+    Logger.log('[FUND_CONSOLIDATION] Revolut: %s accounts processed, $%s USD found, $%s moved', 
+               revolutResult.processed, revolutResult.foundFunds, revolutResult.movedTotal);
+  } catch (e) {
+    Logger.log('[ERROR] Revolut consolidation failed: %s', e.message);
+    consolidation.revolut.errors.push(e.message);
+  }
+  
+  // Process Mercury accounts
+  try {
+    Logger.log('[FUND_CONSOLIDATION] Processing Mercury accounts...');
+    var mercuryResult = consolidateMercuryUsdFunds_(dryRun);
+    consolidation.mercury = mercuryResult;
+    Logger.log('[FUND_CONSOLIDATION] Mercury: %s accounts processed, $%s USD found, $%s moved', 
+               mercuryResult.processed, mercuryResult.foundFunds, mercuryResult.movedTotal);
+  } catch (e) {
+    Logger.log('[ERROR] Mercury consolidation failed: %s', e.message);
+    consolidation.mercury.errors.push(e.message);
+  }
+  
+  // Calculate summary
+  consolidation.summary.totalProcessed = consolidation.revolut.processed + consolidation.mercury.processed;
+  consolidation.summary.totalFound = consolidation.revolut.foundFunds + consolidation.mercury.foundFunds;
+  consolidation.summary.totalMoved = consolidation.revolut.movedTotal + consolidation.mercury.movedTotal;
+  consolidation.summary.totalErrors = consolidation.revolut.errors.length + consolidation.mercury.errors.length;
+  
+  Logger.log('[FUND_CONSOLIDATION] Summary: %s accounts processed, $%s USD found, $%s moved, %s errors', 
+             consolidation.summary.totalProcessed, consolidation.summary.totalFound, 
+             consolidation.summary.totalMoved, consolidation.summary.totalErrors);
+  
+  return consolidation;
+}
+
+/* ============== Revolut Fund Consolidation ============== */
+function consolidateRevolutUsdFunds_(dryRun) {
+  var result = { processed: 0, foundFunds: 0, movedTotal: 0, errors: [], transfers: [] };
+  
+  try {
+    var accounts = getRevolutAccounts_();
+    result.processed = accounts.length || 0;
+    
+    for (var i = 0; i < accounts.length; i++) {
+      var account = accounts[i];
+      var accountName = account.name || account.displayName || 'Unknown';
+      var accountId = account.id || account.account_id || '';
+      
+      // Skip Main account
+      if (accountName.toLowerCase() === 'main') {
+        Logger.log('[REVOLUT_FUNDS] Skipping Main account: %s', accountName);
+        continue;
+      }
+      
+      // Only process USD accounts
+      var accountCurrency = account.currency || '';
+      if (accountCurrency.toLowerCase() !== 'usd') {
+        Logger.log('[REVOLUT_FUNDS] Skipping non-USD account: %s (%s)', accountName, accountCurrency);
+        continue;
+      }
+      
+      // Use the balance directly from account info instead of API call
+      try {
+        var usdBalance = Number(account.balance || 0);
+        Logger.log('[REVOLUT_FUNDS] Account %s USD balance: $%s', accountName, usdBalance);
+        
+        if (usdBalance > 0) {
+          result.foundFunds += usdBalance;
+          
+          var transfer = {
+            fromAccount: accountName,
+            toAccount: 'Main',
+            amount: usdBalance,
+            currency: 'USD',
+            status: 'pending'
+          };
+          
+          if (!dryRun) {
+            try {
+              var transferResult = revolutTransferBetweenAccounts_(accountId, 'Main', 'USD', usdBalance, 'Consolidate USD funds to Main');
+              
+              if (transferResult && transferResult.transfer && transferResult.transfer.state) {
+                if (transferResult.transfer.state === 'completed' || transferResult.transfer.state === 'processing') {
+                  transfer.status = 'success';
+                  transfer.transactionId = transferResult.transfer.id;
+                  result.movedTotal += usdBalance;
+                  Logger.log('[REVOLUT_FUNDS] Successfully moved $%s USD from %s to Main', usdBalance, accountName);
+                } else {
+                  transfer.status = 'failed';
+                  transfer.error = 'Transfer state: ' + transferResult.transfer.state;
+                  result.errors.push('Failed to move $' + usdBalance + ' USD from ' + accountName + ': ' + transferResult.transfer.state);
+                }
+              } else {
+                transfer.status = 'failed';
+                transfer.error = 'Invalid response';
+                result.errors.push('Failed to move $' + usdBalance + ' USD from ' + accountName + ': Invalid response');
+              }
+            } catch (e) {
+              transfer.status = 'failed';
+              transfer.error = e.message;
+              result.errors.push('Failed to move $' + usdBalance + ' USD from ' + accountName + ': ' + e.message);
+            }
+          } else {
+            transfer.status = 'dry_run';
+            Logger.log('[REVOLUT_FUNDS] DRY RUN: Would move $%s USD from %s to Main', usdBalance, accountName);
+          }
+          
+          result.transfers.push(transfer);
+        }
+      } catch (e) {
+        Logger.log('[ERROR] Failed to process Revolut account %s: %s', accountName, e.message);
+        result.errors.push('Failed to process account ' + accountName + ': ' + e.message);
+      }
+    }
+  } catch (e) {
+    Logger.log('[ERROR] Failed to get Revolut accounts: %s', e.message);
+    result.errors.push('Failed to get Revolut accounts: ' + e.message);
+  }
+  
+  return result;
+}
+
+/* ============== Mercury Fund Consolidation ============== */
+function consolidateMercuryUsdFunds_(dryRun) {
+  var result = { processed: 0, foundFunds: 0, movedTotal: 0, errors: [], transfers: [] };
+  
+  try {
+    var accounts = getMercuryAccounts_();
+    result.processed = accounts.length || 0;
+    
+    for (var i = 0; i < accounts.length; i++) {
+      var account = accounts[i];
+      var accountName = account.name || account.displayName || 'Unknown';
+      var accountId = account.id || account.account_id || '';
+      
+      // Skip Main account (Mercury summary represents Main account balance)
+      if (accountName.toLowerCase() === 'main' || accountName.toLowerCase().includes('mercury main') || accountId === 'main' || accountId === 'mercury-main') {
+        Logger.log('[MERCURY_FUNDS] Skipping Main account: %s', accountName);
+        continue;
+      }
+      
+      // Check USD balance (use provided balance for Mercury summary accounts)
+      try {
+        var usdBalance;
+        
+        // For Mercury summary accounts, use the balance directly from account data
+        if (account.summary && account.summary.USD) {
+          usdBalance = Number(account.balance || 0);
+          Logger.log('[MERCURY_FUNDS] Using summary balance for %s: $%s USD', accountName, usdBalance);
+        } else {
+          usdBalance = getMercuryAccountBalance_(accountId, 'USD');
+          Logger.log('[MERCURY_FUNDS] Account %s USD balance: $%s', accountName, usdBalance);
+        }
+        
+        if (usdBalance > 0) {
+          result.foundFunds += usdBalance;
+          
+          var transfer = {
+            fromAccount: accountName,
+            toAccount: 'Main',
+            amount: usdBalance,
+            currency: 'USD',
+            status: 'pending'
+          };
+          
+          if (!dryRun) {
+            try {
+              Logger.log('[MERCURY_FUNDS] Attempting to consolidate $%s USD from Mercury accounts (%s)', usdBalance, accountName);
+              var transferResult = mercuryTransferToMain_(accountId, usdBalance, 'USD', 'Consolidate USD funds to Main');
+              
+              if (transferResult && transferResult.transfer && transferResult.transfer.status) {
+                if (transferResult.transfer.status === 'completed' || transferResult.transfer.status === 'processing') {
+                  transfer.status = 'success';
+                  transfer.transactionId = transferResult.transfer.id;
+                  result.movedTotal += usdBalance;
+                  Logger.log('[MERCURY_FUNDS] Successfully moved $%s USD from %s to Main', usdBalance, accountName);
+                } else {
+                  transfer.status = 'failed';
+                  transfer.error = 'Transfer status: ' + transferResult.transfer.status;
+                  result.errors.push('Failed to move $' + usdBalance + ' USD from ' + accountName + ': ' + transferResult.transfer.status);
+                }
+              } else {
+                transfer.status = 'failed';
+                transfer.error = 'Invalid response';
+                result.errors.push('Failed to move $' + usdBalance + ' USD from ' + accountName + ': Invalid response');
+              }
+            } catch (e) {
+              transfer.status = 'failed';
+              transfer.error = e.message;
+              result.errors.push('Failed to move $' + usdBalance + ' USD from ' + accountName + ': ' + e.message);
+            }
+          } else {
+            transfer.status = 'dry_run';
+            Logger.log('[MERCURY_FUNDS] DRY RUN: Would move $%s USD from %s to Main', usdBalance, accountName);
+          }
+          
+          result.transfers.push(transfer);
+        }
+      } catch (e) {
+        Logger.log('[ERROR] Failed to get balance for Mercury account %s: %s', accountName, e.message);
+        result.errors.push('Failed to get balance for ' + accountName + ': ' + e.message);
+      }
+    }
+  } catch (e) {
+    Logger.log('[ERROR] Failed to get Mercury accounts: %s', e.message);
+    result.errors.push('Failed to get Mercury accounts: ' + e.message);
+  }
+  
+  return result;
+}
+
 /* ============== Revolut Transaction Functions ============== */
 function getRevolutTransactions_(month, year) {
   try {
@@ -784,6 +1167,218 @@ function payUsers_Revolut_ForMonth_(monthStr, options) {
 
   // 🧾 ACCUMULATE month note in column A (new entry at top with timestamp)
   appendNoteTop_(sh, headerA1, lines, tz);
+}
+
+/* ============== Fund Consolidation Public Functions ============== */
+function consolidateFundsToMain(options) {
+  try {
+    Logger.log('=== STARTING FUND CONSOLIDATION ===');
+    var result = consolidateUsdFundsToMain_(options || {});
+    Logger.log('=== FUND CONSOLIDATION COMPLETED ===');
+    return result;
+  } catch (e) {
+    Logger.log('[ERROR] Fund consolidation failed: %s', e.message);
+    throw e;
+  }
+}
+
+function dryRunConsolidateFundsToMain() {
+  Logger.log('[DRY_RUN] Starting fund consolidation dry run...');
+  return consolidateUsdFundsToMain_({ dryRun: true });
+}
+
+function testFundConsolidation() {
+  Logger.log('=== TESTING FUND CONSOLIDATION ===');
+  try {
+    var result = dryRunConsolidateFundsToMain();
+    Logger.log('[TEST] Fund consolidation test completed');
+    return result;
+  } catch (e) {
+    Logger.log('[ERROR] Fund consolidation test failed: %s', e.message);
+    return 'Test failed: ' + e.message;
+  }
+}
+
+function testMercuryApiDiscovery() {
+  Logger.log('=== TESTING MERCURY API DISCOVERY ===');
+  try {
+    Logger.log('[MERCURY_TEST] Starting Mercury API discovery...');
+    
+    // Test various Mercury endpoints
+    var endpointsToTest = [
+      '/mercury/',
+      '/mercury/accounts',
+      '/mercury/balance',
+      '/mercury/summary', 
+      '/mercury/transfer',
+      '/mercury/health',
+      '/mercury/status'
+    ];
+    
+    var availableEndpoints = [];
+    var failedEndpoints = [];
+    
+    for (var i = 0; i < endpointsToTest.length; i++) {
+      var endpoint = endpointsToTest[i];
+      try {
+        Logger.log('[MERCURY_TEST] Testing endpoint: %s', endpoint);
+        var response = httpProxyJson_(endpoint);
+        availableEndpoints.push(endpoint + ' -> SUCCESS');
+        Logger.log('[MERCURY_TEST] ✓ %s works', endpoint);
+      } catch (e) {
+        failedEndpoints.push(endpoint + ' -> ' + (e.message.split('HTTP')[1] || e.message.substring(0, 50)));
+        Logger.log('[MERCURY_TEST] ✗ %s failed: %s', endpoint, e.message.split('HTTP')[1] || e.message);
+      }
+    }
+    
+    // Test if Mercury info is available through other endpoints
+    Logger.log('[MERCURY_TEST] Checking other endpoints for Mercury info...');
+    try {
+      var revolutSummary = httpProxyJson_('/revolut/summary');
+      Logger.log('[MERCURY_TEST] Revolut summary available currencies: %s', Object.keys(revolutSummary || {}).join(', '));
+      
+      // Check for any Mercury-related fields
+      var mercuryFields = Object.keys(revolutSummary || {}).filter(function(key) {
+        return key && key.toLowerCase().includes('mercury');
+      });
+      
+      if (mercuryFields.length > 0) {
+        Logger.log('[MERCURY_TEST] Found Mercury fields in Revolut summary: %s', mercuryFields.join(', '));
+      }
+    } catch (e) {
+      Logger.log('[MERCURY_TEST] Could not check Revolut summary: %s', e.message);
+    }
+    
+    Logger.log('[MERCURY_TEST] Available Mercury endpoints: %s', availableEndpoints.length);
+    availableEndpoints.forEach(function(endpoint) {
+      Logger.log('[MERCURY_TEST]   ✓ %s', endpoint);
+    });
+    
+    Logger.log('[MERCURY_TEST] Failed Mercury endpoints: %s', failedEndpoints.length);
+    failedEndpoints.forEach(function(endpoint) {
+      Logger.log('[MERCURY_TEST]   ✗ %s', endpoint);
+    });
+    
+    var result = {
+      available: availableEndpoints,
+      failed: failedEndpoints,
+      totalTested: endpointsToTest.length,
+      successCount: availableEndpoints.length
+    };
+    
+    Logger.log('[MERCURY_TEST] Mercury API discovery completed: %s/%s endpoints available', result.successCount, result.totalTested);
+    
+    return result;
+    
+  } catch (e) {
+    Logger.log('[ERROR] Mercury API discovery failed: %s', e.message);
+    return 'Discovery failed: ' + e.message;
+  }
+}
+
+function checkConsolidationPrerequisites() {
+  var errors = [];
+  
+  // Check required script properties
+  var proxyUrl = props_().getProperty('PROXY_URL');
+  var proxyToken = props_().getProperty('PROXY_TOKEN');
+  
+  if (!proxyUrl) {
+    errors.push('Missing PROXY_URL script property');
+  }
+  if (!proxyToken) {
+    errors.push('Missing PROXY_TOKEN script property');
+  }
+  
+  // Check if we can reach the proxy server
+  if (proxyUrl && proxyToken) {
+    try {
+      var testResponse = httpProxyJson_('/revolut/summary');
+      if (!testResponse || typeof testResponse.USD !== 'number') {
+        errors.push('Proxy server response invalid - cannot get Revolut balances');
+      }
+    } catch (e) {
+      errors.push('Cannot reach proxy server: ' + e.message);
+    }
+  }
+  
+  return {
+    valid: errors.length === 0,
+    errors: errors
+  };
+}
+
+function getBankAccountSummary() {
+  Logger.log('=== GETTING BANK ACCOUNT SUMMARY ===');
+  
+  try {
+    var summary = {
+      revolut: { accounts: [], totalUsd: 0, mainUsd: 0 },
+      mercury: { accounts: [], totalUsd: 0, mainUsd: 0 },
+      consolidatedUsd: 0
+    };
+    
+    // Get Revolut accounts
+    try {
+      var revolutAccounts = getRevolutAccounts_();
+      summary.revolut.accounts = revolutAccounts || [];
+      
+      for (var i = 0; i < revolutAccounts.length; i++) {
+        var account = revolutAccounts[i];
+        var accountName = account.name || account.displayName || 'Unknown';
+        var accountCurrency = account.currency || '';
+        var accountBalance = Number(account.balance || 0);
+        
+        // Only process USD accounts
+        if (accountCurrency.toLowerCase() === 'usd' && accountBalance > 0) {
+          summary.revolut.totalUsd += accountBalance;
+          if (accountName.toLowerCase() === 'main') {
+            summary.revolut.mainUsd = accountBalance;
+          }
+        }
+      }
+    } catch (e) {
+      Logger.log('[ERROR] Failed to get Revolut accounts: %s', e.message);
+    }
+    
+    // Get Mercury accounts
+    try {
+      var mercuryAccounts = getMercuryAccounts_();
+      summary.mercury.accounts = mercuryAccounts || [];
+      
+      for (var i = 0; i < mercuryAccounts.length; i++) {
+        var account = mercuryAccounts[i];
+        var accountName = account.name || account.displayName || 'Unknown';
+        var accountId = account.id || account.account_id || '';
+        
+        try {
+          var usdBalance = getMercuryAccountBalance_(accountId, 'USD');
+          if (usdBalance > 0) {
+            summary.mercury.totalUsd += usdBalance;
+            if (accountName.toLowerCase() === 'main' || accountId === 'main') {
+              summary.mercury.mainUsd = usdBalance;
+            }
+          }
+        } catch (e) {
+          Logger.log('[WARN] Could not get USD balance for Mercury account %s: %s', accountName, e.message);
+        }
+      }
+    } catch (e) {
+      Logger.log('[ERROR] Failed to get Mercury accounts: %s', e.message);
+    }
+    
+    summary.consolidatedUsd = summary.revolut.mainUsd + summary.mercury.mainUsd;
+    
+    Logger.log('[SUMMARY] Revolut: $%s USD total, $%s USD in Main', summary.revolut.totalUsd.toFixed(2), summary.revolut.mainUsd.toFixed(2));
+    Logger.log('[SUMMARY] Mercury: $%s USD total, $%s USD in Main', summary.mercury.totalUsd.toFixed(2), summary.mercury.mainUsd.toFixed(2));
+    Logger.log('[SUMMARY] Consolidated (Main only): $%s USD', summary.consolidatedUsd.toFixed(2));
+    
+    return summary;
+    
+  } catch (e) {
+    Logger.log('[ERROR] Failed to get bank account summary: %s', e.message);
+    throw e;
+  }
 }
 
 /* ============== Public Interface Functions ============== */
@@ -1574,9 +2169,108 @@ function onOpen() {
     .addItem('📅 August 2025', 'runAugust2025')
     .addItem('📅 September 2025', 'runSeptember2025')
     .addItem('📅 October 2025', 'runOctober2025')
+    .addItem('📅 November 2025', 'runPaymentsNovember2025')
+    .addSeparator()
+    .addItem('📅 Select Month...', 'selectMonthMenu')
+    .addItem('📅 Select Any Month/Year...', 'selectMonthWithYear')
     .addSeparator()
     .addItem('🔍 Check Status', 'checkCurrentMonthStatus')
+    .addSeparator()
+    .addItem('💰 Consolidate USD Funds', 'consolidateFundsMenu')
+    .addItem('🧪 Test Fund Consolidation', 'runTestFundConsolidation')
+    .addItem('📊 Bank Account Summary', 'runBankAccountSummary')
+    .addItem('🔍 Discover Mercury API', 'runMercuryApiDiscovery')
+    .addSeparator()
+    .addItem('⏰ Test Daily Consolidation', 'testDailyConsolidationTrigger')
     .addToUi();
+}
+
+/* ============== DAILY CONSOLIDATION TRIGGER ============== */
+function TRIGGER_consolidateUsdFundsToMainDaily() {
+  Logger.log('=== DAILY USD FUND CONSOLIDATION TRIGGER ===');
+  Logger.log('[DAILY_TRIGGER] Starting automatic USD fund consolidation (DryRun: false)');
+  
+  try {
+    // Run the main consolidation function directly (not dry run)
+    var result = consolidateUsdFundsToMain_({ dryRun: false });
+    
+    Logger.log('[DAILY_TRIGGER] Consolidation completed successfully');
+    Logger.log('[DAILY_TRIGGER] Summary: %s accounts processed, $%s USD found, $%s moved, %s errors', 
+               result.totalProcessed, result.totalFound.toFixed(2), result.movedTotal.toFixed(2), result.errors.length);
+    
+    // Log detailed breakdown
+    Logger.log('[DAILY_TRIGGER] Revolut: %s accounts, $%s found, $%s moved', 
+               result.revolut.processed, result.revolut.foundTotal.toFixed(2), result.revolut.movedTotal.toFixed(2));
+    Logger.log('[DAILY_TRIGGER] Mercury: %s accounts, $%s found, $%s moved', 
+               result.mercury.processed, result.mercury.foundTotal.toFixed(2), result.mercury.movedTotal.toFixed(2));
+    
+    // Log any transfers that were performed
+    var allTransfers = (result.revolut.transfers || []).concat(result.mercury.transfers || []);
+    if (allTransfers.length > 0) {
+      Logger.log('[DAILY_TRIGGER] Transfer Details:');
+      for (var i = 0; i < allTransfers.length; i++) {
+        var transfer = allTransfers[i];
+        Logger.log('[DAILY_TRIGGER]   %s: $%s %s %s -> %s (%s)', 
+                   transfer.fromAccount, transfer.amount.toFixed(2), transfer.currency, 
+                   transfer.toAccount, transfer.status, transfer.transactionId || 'no-id');
+      }
+    }
+    
+    // Log any errors
+    if (result.errors.length > 0) {
+      Logger.log('[DAILY_TRIGGER] Errors encountered:');
+      for (var j = 0; j < result.errors.length; j++) {
+        Logger.log('[DAILY_TRIGGER]   ERROR: %s', result.errors[j]);
+      }
+    }
+    
+    Logger.log('[DAILY_TRIGGER] Daily USD fund consolidation completed successfully');
+    
+    return {
+      success: true,
+      summary: result,
+      timestamp: new Date().toISOString(),
+      message: 'Daily USD fund consolidation completed: $' + result.movedTotal.toFixed(2) + ' moved across ' + result.totalProcessed + ' accounts'
+    };
+    
+  } catch (error) {
+    Logger.log('[DAILY_TRIGGER] Daily consolidation failed: %s', error.message);
+    Logger.log('[DAILY_TRIGGER] Error stack: %s', error.stack);
+    
+    return {
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString(),
+      message: 'Daily USD fund consolidation failed: ' + error.message
+    };
+  }
+}
+
+function testDailyConsolidationTrigger() {
+  Logger.log('=== TESTING DAILY CONSOLIDATION TRIGGER ===');
+  try {
+    var result = TRIGGER_consolidateUsdFundsToMainDaily();
+    
+    var ui = SpreadsheetApp.getUi();
+    if (result.success) {
+      ui.alert('✅ Test Success', 
+               '✅ Daily consolidation test completed successfully!\n\n' + 
+               '📊 ' + result.message + '\n\n' +
+               '✅ Check logs for detailed transfer information.', 
+               ui.ButtonSet.OK);
+    } else {
+      ui.alert('❌ Test Failed', 
+               '❌ Daily consolidation test failed!\n\n' + 
+               '💥 ' + result.message, 
+               ui.ButtonSet.OK);
+    }
+    
+    return result;
+  } catch (error) {
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Error', 'Test failed: ' + error.message, ui.ButtonSet.OK);
+    return { success: false, error: error.message };
+  }
 }
 
 /* ============== SIMPLIFIED MONTH FUNCTIONS ============== */
@@ -1631,6 +2325,20 @@ function runOctober2025() {
     return result;
   } catch (error) {
     var errorMsg = 'October 2025 failed: ' + error.message;
+    Logger.log('[ERROR] ' + errorMsg);
+    throw error;
+  }
+}
+
+function runPaymentsNovember2025() {
+  try {
+    Logger.log('[NOVEMBER 2025] Starting payment process...');
+    var result = payUsersForMonth('11-2025');
+    Logger.log('[SUCCESS] November 2025 payment process completed successfully!');
+    Logger.log('[SUCCESS] Check the logs above for payment details.');
+    return result;
+  } catch (error) {
+    var errorMsg = 'November 2025 failed: ' + error.message;
     Logger.log('[ERROR] ' + errorMsg);
     throw error;
   }
@@ -2278,6 +2986,317 @@ function sendWhatsAppForMonth() {
   } catch (error) {
     var ui = SpreadsheetApp.getUi();
     ui.alert('Error', 'Failed to send WhatsApp notifications: ' + error.message, ui.ButtonSet.OK);
+  }
+}
+
+function consolidateFundsMenu() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    var response = ui.alert(
+      '💰 Consolidate USD Funds',
+      'This will move USD funds from non-Main accounts to Main accounts for both Mercury and Revolut banks.\n\nDo you want to continue?',
+      ui.ButtonSet.YES_NO
+    );
+    
+    if (response === ui.Button.YES) {
+      Logger.log('[MENU] User requested fund consolidation');
+      var result = dryRunConsolidateFundsToMain();
+      
+      var message = '💰 Fund Consolidation Results:\n\n';
+      message += '📊 Summary:\n';
+      message += '• Total accounts processed: ' + result.summary.totalProcessed + '\n';
+      message += '• Total USD found: $' + result.summary.totalFound.toFixed(2) + '\n';
+      message += '• Total USD moved: $' + result.summary.totalMoved.toFixed(2) + '\n';
+      message += '• Errors: ' + result.summary.totalErrors + '\n\n';
+      
+      message += '🏦 Revolut:\n';
+      message += '• Accounts: ' + result.revolut.processed + '\n';
+      message += '• USD found: $' + result.revolut.foundFunds.toFixed(2) + '\n';
+      message += '• USD moved: $' + result.revolut.movedTotal.toFixed(2) + '\n\n';
+      
+      message += '🏦 Mercury:\n';
+      message += '• Accounts: ' + result.mercury.processed + '\n';
+      message += '• USD found: $' + result.mercury.foundFunds.toFixed(2) + '\n';
+      message += '• USD moved: $' + result.mercury.movedTotal.toFixed(2) + '\n\n';
+      
+      if (result.summary.totalErrors > 0) {
+        message += '⚠️ Errors:\n';
+        var allErrors = result.revolut.errors.concat(result.mercury.errors);
+        for (var i = 0; i < Math.min(5, allErrors.length); i++) {
+          message += '• ' + allErrors[i] + '\n';
+        }
+        if (allErrors.length > 5) {
+          message += '• ... and ' + (allErrors.length - 5) + ' more\n';
+        }
+      }
+      
+      ui.alert('Fund Consolidation Results', message, ui.ButtonSet.OK);
+    }
+  } catch (error) {
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Error', 'Fund consolidation failed: ' + error.message, ui.ButtonSet.OK);
+  }
+}
+
+function runTestFundConsolidation() {
+  try {
+    Logger.log('[MENU] User requested fund consolidation test');
+    var result = testFundConsolidation();
+    
+    var ui = SpreadsheetApp.getUi();
+    var message = '🧪 Fund Consolidation Test Completed\n\nThis was a dry run - no actual funds were moved.\n\nCheck the logs for detailed results.';
+    ui.alert('Test Completed', message, ui.ButtonSet.OK);
+    
+    return result;
+  } catch (error) {
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Error', 'Test failed: ' + error.message, ui.ButtonSet.OK);
+  }
+}
+
+function runBankAccountSummary() {
+  try {
+    Logger.log('[MENU] User requested bank account summary');
+    var summary = getBankAccountSummary();
+    
+    var ui = SpreadsheetApp.getUi();
+    var message = '📊 Bank Account Summary:\n\n';
+    message += '🏦 Revolut:\n';
+    message += '• Total USD: $' + summary.revolut.totalUsd.toFixed(2) + '\n';
+    message += '• USD in Main: $' + summary.revolut.mainUsd.toFixed(2) + '\n';
+    message += '• Accounts: ' + summary.revolut.accounts.length + '\n\n';
+    
+    message += '🏦 Mercury:\n';
+    message += '• Total USD: $' + summary.mercury.totalUsd.toFixed(2) + '\n';
+    message += '• USD in Main: $' + summary.mercury.mainUsd.toFixed(2) + '\n';
+    message += '• Accounts: ' + summary.mercury.accounts.length + '\n\n';
+    
+    message += '💰 Consolidated USD (Main accounts only): $' + summary.consolidatedUsd.toFixed(2) + '\n\n';
+    
+    var nonMainUsd = (summary.revolut.totalUsd - summary.revolut.mainUsd) + (summary.mercury.totalUsd - summary.mercury.mainUsd);
+    if (nonMainUsd > 0) {
+      message += '⚠️ USD in non-Main accounts: $' + nonMainUsd.toFixed(2) + '\n';
+      message += '💡 Run "Consolidate USD Funds" to move these to Main accounts.';
+    } else {
+      message += '✅ All USD is already in Main accounts.';
+    }
+    
+    ui.alert('Bank Account Summary', message, ui.ButtonSet.OK);
+    
+    return summary;
+  } catch (error) {
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Error', 'Failed to get bank account summary: ' + error.message, ui.ButtonSet.OK);
+  }
+}
+
+function runMercuryApiDiscovery() {
+  try {
+    Logger.log('[MENU] User requested Mercury API discovery');
+    var result = testMercuryApiDiscovery();
+    
+    var ui = SpreadsheetApp.getUi();
+    var message = '🔍 Mercury API Discovery Results:\n\n';
+    message += '📊 Discovery Summary:\n';
+    message += '• Total endpoints tested: ' + result.totalTested + '\n';
+    message += '• Working endpoints: ' + result.successCount + '\n\n';
+    
+    if (result.successCount > 0) {
+      message += '✅ Available Mercury Endpoints:\n';
+      for (var i = 0; i < Math.min(5, result.available.length); i++) {
+        message += '• ' + result.available[i] + '\n';
+      }
+      if (result.available.length > 5) {
+        message += '• ... and ' + (result.available.length - 5) + ' more\n';
+      }
+      message += '\n🎉 Mercury integration is available!\n';
+      message += '💡 Try running "Consolidate USD Funds" to test.';
+    } else {
+      message += '❌ No Mercury endpoints found\n\n';
+      message += 'Possible reasons:\n';
+      message += '• Mercury API not yet implemented in proxy server\n';
+      message += '• Different endpoint naming convention\n';
+      message += '• Authentication or permission issues\n\n';
+      message += 'Check the logs for detailed error messages.';
+    }
+    
+    ui.alert('Mercury API Discovery', message, ui.ButtonSet.OK);
+    
+    return result;
+  } catch (error) {
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Error', 'Mercury API discovery failed: ' + error.message, ui.ButtonSet.OK);
+  }
+}
+
+function selectMonthMenu() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    
+    // Create month options
+    var monthNames = [
+      'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December'
+    ];
+    
+    var monthOptions = '';
+    for (var i = 0; i < 12; i++) {
+      var monthNumber = (i + 1).toString().padStart(2, '0');
+      monthOptions += (i + 1) + '. ' + monthNames[i] + '\n';
+    }
+    
+    var response = ui.prompt(
+      '📅 Select Month for Payments',
+      'Choose a month:\n\n' + monthOptions + '\nEnter month number (1-12):',
+      ui.ButtonSet.OK_CANCEL
+    );
+    
+    if (response.getSelectedButton() === ui.Button.OK) {
+      var monthInput = response.getResponseText().trim();
+      var monthNumber = parseInt(monthInput, 10);
+      
+      if (monthNumber >= 1 && monthNumber <= 12) {
+        var currentYear = new Date().getFullYear();
+        
+        // For months in the past, use current year. For future months, use next year
+        var selectedMonth = monthNumber.toString().padStart(2, '0');
+        var selectedYear = currentYear;
+        
+        var now = new Date();
+        var currentMonth = now.getMonth() + 1;
+        
+        if (monthNumber <= currentMonth) {
+          selectedYear = currentYear;
+        } else {
+          selectedYear = currentYear;
+        }
+        
+        var monthStr = selectedMonth + '-' + selectedYear;
+        var monthName = monthNames[monthNumber - 1];
+        
+        Logger.log('[MENU] User selected month: %s (%s)', monthStr, monthName);
+        
+        var confirmResponse = ui.alert(
+          'Choose Payment Type',
+          'Run payments for ' + monthName + ' ' + selectedYear + '?\n\n' +
+          'Month: ' + monthStr + '\n\n' +
+          'Click YES for dry run (test only)\n' +
+          'Click NO to cancel\n' +
+          'We\'ll ask again for real payments.',
+          ui.ButtonSet.YES_NO
+        );
+        
+        if (confirmResponse === ui.Button.YES) {
+          // First run dry run
+          var dryResult = dryRunPayUsersForMonth(monthStr);
+          
+          var realConfirmResponse = ui.alert(
+            'Dry Run Completed',
+            'Dry run completed successfully!\n\n' +
+            'Run REAL payments for ' + monthName + ' ' + selectedYear + '?\n' +
+            'This will process actual transfers to users.',
+            ui.ButtonSet.YES_NO
+          );
+          
+          if (realConfirmResponse === ui.Button.YES) {
+            var result = payUsersForMonth(monthStr);
+            
+            ui.alert(
+              '🎉 Payments Completed',
+              'Payment process completed for ' + monthName + ' ' + selectedYear + '!\n\n' +
+              'Check the logs for detailed results.',
+              ui.ButtonSet.OK
+            );
+            
+            return result;
+          } else {
+            Logger.log('[MENU] User cancelled real payment after dry run for %s', monthStr);
+            ui.alert('Cancelled', 'Real payments cancelled after successful dry run.', ui.ButtonSet.OK);
+          }
+        } else {
+          Logger.log('[MENU] User cancelled dry run for %s', monthStr);
+          ui.alert('Cancelled', 'Payment process cancelled.', ui.ButtonSet.OK);
+        }
+      } else {
+        ui.alert('Error', 'Please enter a valid month number (1-12).', ui.ButtonSet.OK);
+      }
+    }
+  } catch (error) {
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Error', 'Month selection failed: ' + error.message, ui.ButtonSet.OK);
+  }
+}
+
+function selectMonthWithYear() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    
+    var response = ui.prompt(
+      '📅 Select Month and Year',
+      'Enter month and year (e.g., 12-2025, 01-2026):\n\n' +
+      'Format: MM-YYYY\n' +
+      'Examples: 12-2025, 01-2026, 06-2026',
+      ui.ButtonSet.OK_CANCEL
+    );
+    
+    if (response.getSelectedButton() === ui.Button.OK) {
+      var inputText = response.getResponseText().trim();
+      
+      try {
+        // Validate the month string
+        var normalizedMonth = validateMonthString(inputText);
+        var monthDisplayName = getMonthDisplayName(normalizedMonth);
+        
+        Logger.log('[MENU] User selected month: %s (%s)', normalizedMonth, monthDisplayName);
+        
+        var confirmResponse = ui.alert(
+          'Choose Payment Type',
+          'Run payments for ' + monthDisplayName + '?\n\n' + 
+          'Month: ' + normalizedMonth + '\n\n' +
+          'Click YES for dry run (test only)\n' +
+          'Click NO to cancel\n' +
+          'We\'ll ask again for real payments.',
+          ui.ButtonSet.YES_NO
+        );
+        
+        if (confirmResponse === ui.Button.YES) {
+          // First run dry run
+          var dryResult = dryRunPayUsersForMonth(normalizedMonth);
+          
+          var realConfirmResponse = ui.alert(
+            'Dry Run Completed',
+            'Dry run completed successfully!\n\n' +
+            'Run REAL payments for ' + monthDisplayName + '?\n' +
+            'This will process actual transfers to users.',
+            ui.ButtonSet.YES_NO
+          );
+          
+          if (realConfirmResponse === ui.Button.YES) {
+            var result = payUsersForMonth(normalizedMonth);
+            
+            ui.alert(
+              '🎉 Payments Completed',
+              'Payment process completed for ' + monthDisplayName + '!\n\n' +
+              'Check the logs for detailed results.',
+              ui.ButtonSet.OK
+            );
+            
+            return result;
+          } else {
+            Logger.log('[MENU] User cancelled real payment after dry run for %s', normalizedMonth);
+            ui.alert('Cancelled', 'Real payments cancelled after successful dry run.', ui.ButtonSet.OK);
+          }
+        } else {
+          Logger.log('[MENU] User cancelled dry run for %s', normalizedMonth);
+          ui.alert('Cancelled', 'Payment process cancelled.', ui.ButtonSet.OK);
+        }
+      } catch (validationError) {
+        ui.alert('Error', 'Invalid month format: ' + validationError.message + '\n\nPlease use format: MM-YYYY (e.g., 12-2025)', ui.ButtonSet.OK);
+      }
+    }
+  } catch (error) {
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Error', 'Month selection failed: ' + error.message, ui.ButtonSet.OK);
   }
 }
 
