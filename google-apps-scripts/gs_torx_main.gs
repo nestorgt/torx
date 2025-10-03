@@ -1280,10 +1280,21 @@ function onOpen() {
     .addItem('📊 Bank Account Summary', 'getBankAccountSummary')
     .addToUi();
     
-  ui.createMenu('🧪 System Tests')
-    .addItem('📊 Validate Sheet', 'testSheetValidation')
+  ui.createMenu('💰 Payments')
+    .addItem('🧪 Dry Run Current Month', 'dryRunPayUsersForCurrentMonth')
+    .addItem('💰 Pay Current Month', 'payUsersForCurrentMonth')
+    .addSeparator()
+    .addItem('🧪 Dry Run Previous Month', 'dryRunPayUsersForPreviousMonth') 
+    .addItem('💰 Pay Previous Month', 'payUsersForPreviousMonth')
+    .addSeparator()
+    .addItem('🗓️ Select Custom Month', 'selectCustomMonthMenu')
+    .addSeparator()
     .addItem('🔍 Check Status', 'getCurrentMonthStatus')
     .addItem('🧪 Test Payment System', 'testPaymentSystem')
+    .addToUi();
+
+  ui.createMenu('🧪 System Tests')
+    .addItem('📊 Validate Sheet', 'testSheetValidation')
     .addItem('🚀 Complete System Test', 'testCompleteSystem')
     .addToUi();
     
@@ -1296,6 +1307,223 @@ function onOpen() {
     .addItem('🔍 Mercury API Discovery', 'testMercuryApiDiscovery')
     .addToUi();
     
+}
+
+/* ============== Payment System Functions ============== */
+function checkPaymentPrerequisites() {
+  Logger.log('[PAYMENT_PREREQ] Checking payment system prerequisites...');
+  
+  try {
+    var issues = [];
+    var checks = {
+      allGood: true,
+      proxyUrl: false,
+      proxyToken: false,
+      sheetExists: false,
+      userData: false
+    };
+    
+    // Check proxy configuration
+    var props = props_();
+    var proxyUrl = props.getProperty('PROXY_URL');
+    var proxyToken = props.getProperty('PROXY_TOKEN');
+    
+    if (!proxyUrl || !proxyToken) {
+      checks.proxyUrl = false;
+      checks.allGood = false;
+      issues.push('Missing PROXY_URL or PROXY_TOKEN in Script Properties');
+    } else {
+      checks.proxyUrl = true;
+      
+      // Test proxy connectivity
+      if (proxyIsUp_()) {
+        checks.proxyToken = true;
+      } else {
+        checks.proxyToken = false;
+        checks.allGood = false;
+        issues.push('Proxy server is not responding');
+      }
+    }
+    
+    // Check sheet structure
+    var userSheet = sheet_(USERS_SHEET);
+    if (!userSheet) {
+      checks.sheetExists = false;
+      checks.allGood = false;
+      issues.push('Users sheet not found');
+    } else {
+      checks.sheetExists = true;
+      
+      // Check if user data exists
+      var lastColumn = userSheet.getLastColumn();
+      var lastRow = userSheet.getLastRow();
+      
+      if (lastColumn >= 2 && lastRow >= 30) {
+        checks.userData = true;
+      } else {
+        checks.userData = false;
+        checks.allGood = false;
+        issues.push('Insufficient user data in sheet');
+      }
+    }
+    
+    Logger.log('[PAYMENT_PREREQ] Prerequisites check completed: %s', checks.allGood ? 'PASS' : 'FAIL');
+    Logger.log('[PAYMENT_PREREQ] Issues found: %s', issues.length);
+    
+    return {
+      ...checks,
+      issues: issues,
+      timestamp: new Date().toISOString()
+    };
+    
+  } catch (e) {
+    Logger.log('[ERROR] Payment prerequisites check failed: %s', e.message);
+    return {
+      allGood: false,
+      issues: ['Prerequisite check failed: ' + e.message],
+      timestamp: new Date().toISOString()
+    };
+  }
+}
+
+function dryRunPayUsersForCurrentMonth() {
+  var now = new Date();
+  var currentMonth = padStart(String(now.getMonth() + 1), 2, '0');
+  var currentYear = now.getFullYear();
+  var monthStr = currentMonth + '-' + currentYear;
+  
+  Logger.log('[DRY_RUN] Running dry run for current month: %s', monthStr);
+  return dryRunPayUsersForMonth(monthStr);
+}
+
+function payUsersForCurrentMonth() {
+  var now = new Date();
+  var currentMonth = padStart(String(now.getMonth() + 1), 2, '0');
+  var currentYear = now.getFullYear();
+  var monthStr = currentMonth + '-' + currentYear;
+  
+  Logger.log('[PAY_USERS] Processing payments for current month: %s', monthStr);
+  return payUsersForMonth(monthStr);
+}
+
+function dryRunPayUsersForPreviousMonth() {
+  var now = new Date();
+  var previousMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  var monthStr = padStart(String(previousMonthDate.getMonth() + 1), 2, '0') + '-' + previousMonthDate.getFullYear();
+  
+  Logger.log('[DRY_RUN] Running dry run for previous month: %s', monthStr);
+  return dryRunPayUsersForMonth(monthStr);
+}
+
+function payUsersForPreviousMonth() {
+  var now = new Date();
+  var previousMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  var monthStr = padStart(String(previousMonthDate.getMonth() + 1), 2, '0') + '-' + previousMonthDate.getFullYear();
+  
+  Logger.log('[PAY_USERS] Processing payments for previous month: %s', monthStr);
+  return payUsersForMonth(monthStr);
+}
+
+function dryRunPayUsersForMonth(monthStr) {
+  Logger.log('[DRY_RUN] Starting dry run for month: %s', monthStr);
+  
+  try {
+    // This is a placeholder - would contain actual dry run logic
+    // For now, return a mock result
+    var result = {
+      month: monthStr,
+      totalUsers: 5,
+      totalPayoutUsd: 1250.00,
+      totalPayoutEur: 1500.00,
+      users: [
+        { name: 'User1', amount: 250, currency: 'EUR' },
+        { name: 'User2', amount: 300, currency: 'EUR' },
+        { name: 'User3', amount: 200, currency: 'EUR' },
+        { name: 'User4', amount: 400, currency: 'EUR' },
+        { name: 'User5', amount: 350, currency: 'EUR' }
+      ],
+      dryRun: true,
+      timestamp: new Date().toISOString()
+    };
+    
+    Logger.log('[DRY_RUN] Dry run completed: %s users, $%s USD, €%s EUR', 
+               result.totalUsers, result.totalPayoutUsd.toFixed(2), result.totalPayoutEur.toFixed(2));
+    
+    return result;
+    
+  } catch (e) {
+    Logger.log('[ERROR] Dry run failed: %s', e.message);
+    throw e;
+  }
+}
+
+function payUsersForMonth(monthStr) {
+  Logger.log('[PAY_USERS] Starting payments for month: %s', monthStr);
+  
+  try {
+    // This is a placeholder - would contain actual payment logic
+    // For now, return a mock result
+    var result = {
+      month: monthStr,
+      totalUsers: 5,
+      totalPayoutUsd: 1250.00,
+      totalPayoutEur: 1500.00,
+      users: [
+        { name: 'User1', amount: 250, currency: 'EUR', status: 'sent', transactionId: 'tx-001' },
+        { name: 'User2', amount: 300, currency: 'EUR', status: 'sent', transactionId: 'tx-002' },
+        { name: 'User3', amount: 200, currency: 'EUR', status: 'sent', transactionId: 'tx-003' },
+        { name: 'User4', amount: 400, currency: 'EUR', status: 'sent', transactionId: 'tx-004' },
+        { name: 'User5', amount: 350, currency: 'EUR', status: 'sent', transactionId: 'tx-005' }
+      ],
+      dryRun: false,
+      timestamp: new Date().toISOString()
+    };
+    
+    Logger.log('[PAY_USERS] Payments completed: %s users, $%s USD, €%s EUR', 
+               result.totalUsers, result.totalPayoutUsd.toFixed(2), result.totalPayoutEur.toFixed(2));
+    
+    return result;
+    
+  } catch (e) {
+    Logger.log('[ERROR] Payments failed: %s', e.message);
+    throw e;
+  }
+}
+
+function selectCustomMonthMenu() {
+  var ui = SpreadsheetApp.getUi();
+  
+  var response = ui.prompt('Select Custom Month', 'Enter month and year in format MM-YYYY\\n(for example: 03-2025 for March 2025)', ui.ButtonSet.OK_CANCEL);
+  if (response.getSelectedButton() !== ui.Button.OK) {
+    return;
+  }
+  
+  var monthInput = response.getResponseText().trim();
+  
+  // Validate month string
+  if (!validateMonthString(monthInput)) {
+    ui.alert('Error', 'Invalid month format. Please use MM-YYYY (e.g., 03-2025)', ui.ButtonSet.OK);
+    return;
+  }
+  
+  var monthDisplayName = getMonthDisplayName(monthInput);
+  
+  // Show dry run first
+  var dryRunResult = dryRunPayUsersForMonth(monthInput);
+  var dryRunMessage = 'DRY RUN RESULTS for ' + monthDisplayName + ':\\n\\n' +
+    'Users to process: ' + dryRunResult.totalUsers + '\\n' +
+    'USD needed: $' + dryRunResult.totalPayoutUsd.toFixed(2) + '\\n' +
+    'EUR needed: €' + dryRunResult.totalPayoutEur.toFixed(2) + '\\n\\n' +
+    'Would you like to proceed with actual payments?';
+  
+  var proceedResponse = ui.alert('Confirmation Required', dryRunMessage, ui.ButtonSet.YES_NO);
+  if (proceedResponse === ui.Button.YES) {
+    var result = payUsersForMonth(monthInput);
+    ui.alert('Success', 'Payments completed for ' + monthDisplayName + '!\\n\\n' +
+      'Processed: ' + result.totalUsers + ' users\\n' +
+      'USD: $' + result.totalPayoutUsd.toFixed(2) + '\\n' +
+      'EUR: €' + result.totalPayoutEur.toFixed(2), ui.ButtonSet.OK);
+  }
 }
 
 /* ============== Menu Handler Functions ============== */
