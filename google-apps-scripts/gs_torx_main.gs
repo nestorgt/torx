@@ -168,7 +168,7 @@ function setCellKeepFmt_(sh, a1, value, note) {
     if (note) {
       var existingNote = rng.getNote() || '';
       var timestamp = nowStamp_();
-      var newNote = existingNote ? `${existingNote}\n${timestamp}: ${note}` : `${timestamp}: ${note}`;
+      var newNote = existingNote ? existingNote + '\n' + timestamp + ': ' + note : timestamp + ': ' + note;
       rng.setNote(newNote);
     }
   } catch (e) {
@@ -180,7 +180,7 @@ function setNoteOnly_(sh, a1, note) {
   try {
     note = safeErrorNote_(note) || note;
     var existingNote = sh.getRange(a1).getNote() || '';
-    note = existingNote ? `${existingNote}\n${nowStamp_()}: ${note}` : `${nowStamp_()}: ${note}`;
+    note = existingNote ? existingNote + '\n' + nowStamp_() + ': ' + note : nowStamp_() + ': ' + note;
     sh.getRange(a1).setNote(note);
   } catch (e) {
     Logger.log('[ERROR] setNoteOnly_ failed for %s: %s', a1, e.message);
@@ -519,12 +519,12 @@ function formatCurrency(amount, currency) {
 
 function logPaymentOperation(operation, monthStr, details) {
   var timestamp = nowStamp_();
-  var logMsg = `[PAYMENT_OP] ${timestamp} | ${operation} | ${monthStr} | ${details}`;
+  var logMsg = '[PAYMENT_OP] ' + timestamp + ' | ' + operation + ' | ' + monthStr + ' | ' + details;
   Logger.log(logMsg);
   
   try {
     var sh = sheet_(SHEET_NAME);
-    var note = `PAYMENT LOG | ${timestamp} | ${operation} | ${monthStr}\n${details}`;
+    var note = 'PAYMENT LOG | ' + timestamp + ' | ' + operation + ' | ' + monthStr + '\n' + details;
     setNoteOnly_(sh, 'A1', note);
   } catch (e) {
     Logger.log('[LOG_ERROR] Failed to write payment log: %s', e.message);
@@ -535,9 +535,12 @@ function appendNoteTop_(sh, a1, lines, tz) {
   try {
     var existingNote = sh.getRange(a1).getNote() || '';
     var timestamp = nowStamp_();
-    var newNote = lines.map(line => `${timestamp}: ${line}`).join('\\n');
-    var fullNote = newNote + (existingNote ? '\\n' + existingNote : '');
-    sh.getRange(a1)`).setNote(fullNote);
+    var newNote = '';
+    for (var i = 0; i < lines.length; i++) {
+      newNote += (i > 0 ? '\n' : '') + timestamp + ': ' + lines[i];
+    }
+    var fullNote = newNote + (existingNote ? '\n' + existingNote : '');
+    sh.getRange(a1).setNote(fullNote);
   } catch (e) {
     Logger.log('[ERROR] appendNoteTop_ failed: %s', e.message);
   }
@@ -580,7 +583,7 @@ function getRevolutAccounts_() {
 function getRevolutAccountBalance_(accountId, currency) {
   try {
     Logger.log('[REVOLUT] Getting balance for account %s with currency %s', accountId, currency);
-    var path = `/revolut/account/${encodeURIComponent(accountId)}?currency=${currency}`;
+    var path = '/revolut/account/' + encodeURIComponent(accountId) + '?currency=' + currency;
     var account = httpProxyJson_(path);
     
     var balance = account.balance || account[currency] || 0;
@@ -600,7 +603,7 @@ function revolutTransferBetweenAccounts_(fromName, toName, currency, amount, ref
     amount: amount,
     currency: currency,
     reference: reference || 'Transfer from ' + fromName,
-    request_id: `${nowStamp_()}-${amount}-${currency}`
+    request_id: nowStamp_() + '-' + amount + '-' + currency
   };
   
   Logger.log('[REVOLUT] Transfer payload: %s', JSON.stringify(body, null, 2));
@@ -610,7 +613,7 @@ function revolutTransferBetweenAccounts_(fromName, toName, currency, amount, ref
 function getRevolutTransactions_(month, year) {
   Logger.log('[REVOLUT] Getting transactions for %s-%s', month, year);
   try {
-    var path = `/revolut/transactions?month=${month}&year=${year}`;
+    var path = '/revolut/transactions?month=' + month + '&year=' + year;
     var response = httpProxyJson_(path);
     Logger.log('[REVOLUT] Retrieved %s transactions', response.transactions ? response.transactions.length : 0);
     return response;
@@ -689,9 +692,9 @@ function getMercuryAccountBalance_(accountId, currency) {
     
     // Try different possible Mercury balance endpoints
     var endpoints = [
-      `/mercury/balance/${accountId}?currency=${currency}`,
-      `/mercury/accounts/${accountId}?currency=${currency}`,
-      `/mercury/${accountId}/balance?currency=${currency}`
+      '/mercury/balance/' + accountId + '?currency=' + currency,
+      '/mercury/accounts/' + accountId + '?currency=' + currency,
+      '/mercury/' + accountId + '/balance?currency=' + currency
     ];
     
     for (var i = 0; i < endpoints.length; i++) {
@@ -724,7 +727,7 @@ function mercuryTransferToMain_(fromAccountId, amount, currency, reference) {
     amount: amount,
     currency: currency,
     reference: reference || 'Consolidate ' + currency + ' funds to Main',
-    request_id: `${nowStamp_()}-${amount}-${currency}`
+    request_id: nowStamp_() + '-' + amount + '-' + currency
   };
   
   Logger.log('[MERCURY] Transfer payload: %s', JSON.stringify(body, null, 2));
@@ -1067,7 +1070,7 @@ function revolutFxUsdToEur_(usdAmount, requestId, reference) {
     amount: eurAmount,
     currency: 'EUR',
     reference: reference || 'USD to EUR conversion',
-    request_id: requestId || `fx-${nowStamp_()}-${usdAmount}`
+    request_id: requestId || 'fx-' + nowStamp_() + '-' + usdAmount
   };
   
   Logger.log('[REVOLUT_FX] Sending EUR amount: %s for USD: %s', eurAmount, usdAmount);
@@ -1082,7 +1085,7 @@ function revolutMove_(toName, eurAmount, requestId, reference) {
     amount: eurAmount,
     currency: 'EUR',
     reference: reference || 'Payment to ' + toName,
-    request_id: requestId || `payment-${nowStamp_()}-${eurAmount}`
+    request_id: requestId || 'payment-' + nowStamp_() + '-' + eurAmount
   };
   
   Logger.log('[REVOLUT] Payment payload: %s', JSON.stringify(body, null, 2));
@@ -1099,7 +1102,7 @@ function sendPaymentNotification_(userName, monthStr, amount, requestId, phoneNu
   Logger.log('[WHATSAPP] Sending payment notification to %s (%s)', userName, phoneNumber);
   
   try {
-    var message = `$${amount} EUR sent to your Revolut account ${phoneNumber} for ${monthStr}. Transaction ID: ${requestId}`;
+    var message = '$' + amount + ' EUR sent to your Revolut account ' + phoneNumber + ' for ' + monthStr + '. Transaction ID: ' + requestId;
     
     var payload = {
       to: phoneNumber.replace(/[^\d+]/g, ''),
