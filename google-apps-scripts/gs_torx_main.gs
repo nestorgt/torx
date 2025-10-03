@@ -2033,18 +2033,39 @@ function testSheetValidation() {
         issues.push('Not enough rows (minimum 30 required)');
       }
       
-      // Check required row headers
+      // Check required row headers - look for active user columns
       var headerRow = usersSheet.getRange(1, 2, 1, lastColumn - 1).getValues()[0];
-      var emptyColumns = headerRow.filter(function(val) { return !val || String(val).trim() === ''; });
-      if (emptyColumns.length > 0) {
-        issues.push('Empty user columns found: ' + emptyColumns.length);
+      var userNames = headerRow.filter(function(val) { return val && String(val).trim() !== ''; });
+      var emptyColumns = headerRow.length - userNames.length;
+      
+      if (emptyColumns > 0) {
+        issues.push('Status: ' + userNames.length + ' active users, ' + emptyColumns + ' empty columns (normal)');
+      }
+      
+      // Flag as issue only if there are no user names at all
+      if (userNames.length === 0) {
+        issues.push('No user columns found - check row 1 for user names');
       }
     }
     
+    // Determine if the sheet is actually problematic
+    var criticalIssues = issues.filter(function(issue) { 
+      return !issue.includes('active users') && !issue.includes('empty columns (normal)');
+    });
+    
+    // Get user info for display
+    var userInfo = '';
+    if (usersSheet) {
+      var headerRow = usersSheet.getRange(1, 2, 1, usersSheet.getLastColumn() - 1).getValues()[0];
+      var userNames = headerRow.filter(function(val) { return val && String(val).trim() !== ''; });
+      var emptyColumns = headerRow.length - userNames.length;
+      userInfo = 'Active Users: ' + userNames.length + '\\nEmpty Columns: ' + emptyColumns + '\\n';
+    }
+    
     var message = '📊 SHEET VALIDATION RESULTS\\n\\n' +
-      'Sheet Structure: ' + (issues.length === 0 ? '✅ Valid' : '❌ Issues Found') + '\\n' +
-      'Issues: ' + issues.length + '\\n\\n' +
-      (issues.length === 0 ? 'All checks passed!' : issues.join('\\n'));
+      (criticalIssues.length === 0 ? 'Sheet Structure Valid ✅' : 'Sheet has Issues ❌') + '\\n\\n' + 
+      userInfo + '\\n' +
+      (criticalIssues.length === 0 ? 'Sheet is ready for for use! ✅' : 'Issues found:\\n' + criticalIssues.join('\\n'));
     
     SpreadsheetApp.getUi().alert('Sheet Validation', message, SpreadsheetApp.getUi().ButtonSet.OK);
     
