@@ -126,6 +126,10 @@ function nowStamp_() {
   return Utilities.formatDate(new Date(), CURRENT_TIMEZONE, "yyyy-MM-dd HH:mm:ss");
 }
 
+function nowStampCell_() {
+  return Utilities.formatDate(new Date(), CURRENT_TIMEZONE, "dd-MM HH:mm");
+}
+
 function toBool_(value) {
   if (typeof value === 'boolean') return value;
   if (typeof value === 'string') {
@@ -1160,7 +1164,7 @@ function updateBankBalance_(sh, bankName, summary, note) {
     }
     
     // Update timestamp
-    sh.getRange(TS_CELL).setValue(nowStamp_());
+    sh.getRange(TS_CELL).setValue(nowStampCell_());
     
     Logger.log('[BALANCE] ✅ %s balance updated successfully', bankName);
   } catch (e) {
