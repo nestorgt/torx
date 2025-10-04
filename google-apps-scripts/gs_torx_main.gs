@@ -121,6 +121,7 @@ var CELLS = {
   Revolut:   { USD: 'D2', EUR: 'D3' },
   Wise:      { USD: 'E2', EUR: 'E3' },
   Nexo:      { USD: 'F2' }             // USD-only
+  
 };
 
 /* ============== Core Utilities ============== */
@@ -143,6 +144,23 @@ function toBool_(value) {
 
 function props_() { 
   return PropertiesService.getScriptProperties(); 
+}
+
+function getProp_(key) {
+  try {
+    return props_().getProperty(key);
+  } catch (e) {
+    Logger.log('[ERROR] getProp_ failed for %s: %s', key, e.message);
+    return null;
+  }
+}
+
+function setProp_(key, value) {
+  try {
+    props_().setProperty(key, value);
+  } catch (e) {
+    Logger.log('[ERROR] setProp_ failed for %s: %s', key, e.message);
+  }
 }
 
 function sheet_(name) {
@@ -634,6 +652,75 @@ function fetchMercurySummary_() {
   return httpProxyJson_('/mercury/summary'); 
 }
 
+function fetchMercuryMainBalance_() {
+  /*
+   * Get Mercury Main account balance specifically (not total across all accounts)
+   * This is the balance that matters for card spending and business operations
+   */
+  try {
+    Logger.log('[MERCURY_MAIN] Fetching Main account balance specifically...');
+    
+    // Get detailed account breakdown
+    var accountsData = httpProxyJson_('/mercury/accounts');
+    
+    if (accountsData && Array.isArray(accountsData.accounts)) {
+      // Find the Main account (Mercury Checking ••2290)
+      var mainAccount = accountsData.accounts.find(account => 
+        account.name?.includes('2290') || 
+        account.nickpage?.includes('2290') ||
+        account.isMainAccount === true
+      );
+      
+      if (mainAccount) {
+        Logger.log('[MERCURY_MAIN] Main account found: %s with $%s USD', mainAccount.name, mainAccount.balance);
+        Logger.log('[MERCURY_MAIN] Available balance: $%s USD', mainAccount.availableBalance);
+        
+        return {
+          USD: parseFloat(mainAccount.availableBalance || mainAccount.balance || 0),
+          EUR: 0, // Mercury typically uses USD
+          accountId: mainAccount.id,
+          accountName: mainAccount.name,
+          isMainAccount: true,
+          note: 'Main account balance only'
+        };
+      } else {
+        Logger.log('[WARNING] Mercury Main account not found, falling back to summary');
+        // Fallback to summary if main account not found
+        var summary = fetchMercurySummary_();
+        return {
+          USD: parseFloat(summary.USD || 0),
+          EUR: parseFloat(summary.EUR || 0),
+          note: 'Total across all accounts (Main account not identified)'
+        };
+      }
+    } else {
+      Logger.log('[WARNING] Mercury accounts endpoint not available, falling back to summary');
+      // Fallback to summary
+      var summary = fetchMercurySummary_();
+      return {
+        USD: parseFloat(summary.USD || 0),
+        EUR: parseFloat(summary.EUR || 0),
+        note: 'Total across all accounts (detailed accounts not available)'
+      };
+    }
+  } catch (e) {
+    Logger.log('[ERROR] fetchMercuryMainBalance_ failed: %s', e.message);
+    // Fallback to summary on error
+    try {
+      var summary = fetchMercurySummary_();
+      return {
+        USD: parseFloat(summary.USD || 0),
+        EUR: parseFloat(summary.EUR || 0),
+        error: e.message,
+        note: 'Fallback to summary due to error'
+      };
+    } catch (e2) {
+      Logger.log('[ERROR] Summary fallback also failed: %s', e2.message);
+      return { USD: 0, EUR: 0, error: e.message };
+    }
+  }
+}
+
 function getMercuryAccounts_() {
   try {
     // Try different possible Mercury endpoints
@@ -763,16 +850,191 @@ function fetchWiseSummary_() {
 
 function fetchAirwallexSummary_() {
   try {
-    var airwallexData = getJsonProp_('AIRWALLEX_TOKEN');
-    if (airwallexData) {
-      return httpProxyJson_('/airwallex/summary');
-    } else {
-      Logger.log('[AIRWALLEX] No token available - skipping summary');
+    Logger.log('[AIRWALLEX] Fetching summary directly from API');
+    
+    // Get credentials from script properties
+    var clientId = getProp_('AIRWALLEX_CLIENT_ID');
+    var clientSecret = getProp_('AIRWALLEX_CLIENT_SECRET');
+    
+    if (!clientId || !clientSecret) {
+      Logger.log('[AIRWALLEX] Missing credentials - skipping summary');
       return { USD: 0, EUR: 0, count: 0 };
     }
+    
+    // Step 1: Authenticate
+    var authResult = airwallexAuthenticate_(clientId, clientSecret);
+    if (!authResult.success || !authResult.token) {
+      Logger.log('[AIRWALLEX] Authentication failed: %s', authResult.error);
+      return { USD: 0, EUR: 0, count: 0 };
+    }
+    
+    // Step 2: Get balances
+    var balances = airwallexGetBalances_(authResult.token);
+    
+    // Step 3: Format response
+    var summary = {
+      USD: 0,
+      EUR: 0,
+      count: balances.length
+    };
+    
+    for (var i = 0; i < balances.length; i++) {
+      var balance = balances[i];
+      var currency = balance.currency;
+      var amount = parseFloat(balance.amount) || 0;
+      
+      if (currency === 'USD') {
+        summary.USD += amount;
+      } else if (currency === 'EUR') {
+        summary.EUR += amount;
+      }
+    }
+    
+    Logger.log('[AIRWALLEX] Summary: %s USD, %s EUR, %s accounts', summary.USD, summary.EUR, summary.count);
+    return summary;
+    
   } catch (e) {
     Logger.log('[ERROR] Failed to get Airwallex summary: %s', e.message);
     return { USD: 0, EUR: 0, count: 0 };
+  }
+}
+
+function airwallexAuthenticate_(clientId, clientSecret) {
+  try {
+    Logger.log('[AIRWALLEX] Attempting authentication with client ID: %s', clientId.substring(0, 8) + '...');
+    
+    var authUrl = 'https://api.airwallex.com/api/v1/authentication/login';
+    var payload = {
+      client_id: clientId,
+      api_key: clientSecret
+    };
+    
+    var options = {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    };
+    
+    var response = UrlFetchApp.fetch(authUrl, options);
+    var statusCode = response.getResponseCode();
+    var responseText = response.getContentText();
+    
+    Logger.log('[AIRWALLEX] Auth response status: %s', statusCode);
+    Logger.log('[AIRWALLEX] Auth response: %s', responseText);
+    
+    if (statusCode !== 201) {
+      return {
+        success: false,
+        error: 'Authentication failed with status ' + statusCode + ': ' + responseText
+      };
+    }
+    
+    var authData = JSON.parse(responseText);
+    if (!authData.token) {
+      return {
+        success: false,
+        error: 'No token in auth response: ' + responseText
+      };
+    }
+    
+    Logger.log('[AIRWALLEX] ✅ Authentication successful');
+    
+    // Cache token for future use (optional)
+    setProp_('AIRWALLEX_TOKEN_TIMESTAMP', new Date().getTime().toString());
+    setProp_('AIRWALLEX_TOKEN', authData.token);
+    
+    return {
+      success: true,
+      token: authData.token
+    };
+    
+  } catch (e) {
+    Logger.log('[ERROR] Airwallex authentication error: %s', e.message);
+    return {
+      success: false,
+      error: e.message
+    };
+  }
+}
+
+function airwallexGetBalances_(token) {
+  try {
+    Logger.log('[AIRWALLEX] Fetching account balances');
+    
+    var balancesUrl = 'https://api.airwallex.com/api/v1/accounts';
+    var options = {
+      method: 'GET',
+      headers: {
+        'Authorization': 'Bearer ' + token,
+        'Accept': 'application/json'
+      },
+      muteHttpExceptions: true
+    };
+    
+    var response = UrlFetchApp.fetch(balancesUrl, options);
+    var statusCode = response.getResponseCode();
+    var responseText = response.getContentText();
+    
+    Logger.log('[AIRWALLEX] Balances response status: %s', statusCode);
+    Logger.log('[AIRWALLEX] Balances response: %s', responseText);
+    
+    if (statusCode !== 200) {
+      throw new Error('Failed to fetch balances with status ' + statusCode + ': ' + responseText);
+    }
+    
+    var balancesData = JSON.parse(responseText);
+    var balances = balancesData.data || [];
+    
+    Logger.log('[AIRWALLEX] Found %s accounts', balances.length);
+    
+    // Get current balances for each account
+    var currentBalances = [];
+    
+    for (var i = 0; i < balances.length; i++) {
+      try {
+        var account = balances[i];
+        if (!account.id) continue;
+        
+        var balanceUrl = 'https://api.airwallex.com/api/v1/balances/current?account_id=' + account.id;
+        var balanceOptions = {
+          method: 'GET',
+          headers: {
+            'Authorization': 'Bearer ' + token,
+            'Accept': 'application/json'
+          },
+          muteHttpExceptions: true
+        };
+        
+        var balanceResponse = UrlFetchApp.fetch(balanceUrl, balanceOptions);
+        var balanceStatus = balanceResponse.getResponseCode();
+        var balanceText = balanceResponse.getContentText();
+        
+        if (balanceStatus === 200) {
+          var accountBalances = JSON.parse(balanceText);
+          if (Array.isArray(accountBalances)) {
+            currentBalances = currentBalances.concat(accountBalances);
+          }
+        } else {
+          Logger.log('[AIRWALLEX] Failed to get balance for account %s: %s', account.id, balanceText);
+        }
+        
+        // Small delay to avoid rate limiting
+        Utilities.sleep(100);
+        
+      } catch (e) {
+        Logger.log('[ERROR] Failed to get balance for account %s: %s', balances[i].id, e.message);
+      }
+    }
+    
+    Logger.log('[AIRWALLEX] ✅ Retrieved %s balance entries', currentBalances.length);
+    return currentBalances;
+    
+  } catch (e) {
+    Logger.log('[ERROR] Failed to fetch Airwallex balances: %s', e.message);
+    return [];
   }
 }
 
@@ -780,10 +1042,575 @@ function fetchNexoSummary_() {
   return httpProxyJson_('/nexo/summary'); 
 }
 
-/* ============== Fund Consolidation System ============== */
+/* ============== Intelligent Consolidation & Top-up System ============== */
+function intelligentConsolidationSystem_(options) {
+  Logger.log('=== STARTING INTELLIGENT CONSOLIDATION SYSTEM ===');
+  Logger.log('[INTELLIGENT_SYSTEM] Starting comprehensive USD consolidation and top-up (dryRun: %s)', options.dryRun);
+  
+  // Check for pending transfers before starting
+  var hasPendingTransfers = checkPendingTransfers_();
+  if (hasPendingTransfers && !options.force) {
+    Logger.log('[INTELLIGENT_SYSTEM] Skipping consolidation - pending transfers detected');
+    return {
+      skipped: true,
+      reason: 'Pending transfers detected',
+      pendingTransfers: getPendingTransfers_(),
+      status: 'SKIPPED'
+    };
+  }
+  
+  var THRESHOLD_USD = 1000;
+  var TRANSFER_AMOUNT_USD = 3000;
+  
+  var result = {
+    status: 'SUCCESS',
+    timestamp: new Date().toLocaleString(),
+    thresholdUsd: THRESHOLD_USD,
+    transferAmountUsd: TRANSFER_AMOUNT_USD,
+    steps: {
+      step1_fetchBalances: null,
+      step2_internalConsolidation: null,
+      step3_crossBankTopup: null
+    },
+    summary: {
+      totalUsdConsolidated: 0,
+      totalUsdTransferred: 0,
+      mainAccountBalances: {},
+      actionsTaken: []
+    },
+    errors: []
+  };
+  
+  try {
+    // STEP 1: Fetch all USD balances for all banks
+    Logger.log('[STEP_1] Fetching all bank USD balances...');
+    var bankBalances = fetchAllBankUsdBalances_();
+    result.steps.step1_fetchBalances = bankBalances;
+    Logger.log('[STEP_1] Completed: Retrieved balances from %s banks', Object.keys(bankBalances).length);
+    
+    // STEP 2: Internal consolidation (move funds within banks to Main accounts)
+    Logger.log('[STEP_2] Starting internal consolidation...');
+    var internalResults = performInternalConsolidation_(bankBalances, options.dryRun);
+    result.steps.step2_internalConsolidation = internalResults;
+    
+    // Update balances after internal consolidation
+    bankBalances = updateBalancesAfterInternalConsolidation_(bankBalances, internalResults);
+    Logger.log('[STEP_2] Completed: Internal consolidation finished');
+    
+    // STEP 3: Cross-bank top-up (transfer between banks to meet thresholds)
+    Logger.log('[STEP_3] Starting cross-bank top-up...');
+    var topupResults = performCrossBankTopup_(bankBalances, THRESHOLD_USD, TRANSFER_AMOUNT_USD, options.dryRun);
+    result.steps.step3_crossBankTopup = topupResults;
+    Logger.log('[STEP_3] Completed: Cross-bank top-up finished');
+    
+    // Calculate final summary
+    result.summary.totalUsdConsolidated = internalResults.totalMoved || 0;
+    result.summary.totalUsdTransferred = topupResults.totalMoved || 0;
+    result.summary.mainAccountBalances = getFinalMainAccountBalances_(bankBalances, internalResults, topupResults);
+    
+    Logger.log('[INTELLIGENT_SYSTEM] System completed successfully');
+    return result;
+    
+  } catch (e) {
+    Logger.log('[ERROR] Intelligent consolidation system failed: %s', e.message);
+    result.status = 'ERROR';
+    result.error = e.message;
+    result.errors.push(e.message);
+    return result;
+  }
+}
+
+/* ============== Transfer Status Management Functions ============== */
+function adjustBalancesForPendingTransfers_(balances) {
+  /*
+   * Adjust bank balances to account for pending outbound transfers
+   * This ensures consolidation doesn't double-count funds already "in transit"
+   */
+  try {
+    var pendingTransfers = getPendingTransfers_();
+    
+    if (pendingTransfers.length === 0) {
+      Logger.log('[PENDING_ADJUSTMENT] No pending transfers found');
+      return balances;
+    }
+    
+    Logger.log('[PENDING_ADJUSTMENT] Found %s pending transfers - adjusting balances', pendingTransfers.length);
+    
+    // Adjust balances for outgoing transfers (amounts "committed" but not yet arrived)
+    for (var i = 0; i < pendingTransfers.length; i++) {
+      var transfer = pendingTransfers[i];
+      var bankName = transfer.bankName || 'Unknown';
+      
+      if (bankName.toLowerCase() === 'mercury' && balances.mercury) {
+        balances.mercury.USD = Math.max(0, parseFloat(balances.mercury.USD || 0) - parseFloat(transfer.amount || 0));
+        Logger.log('[PENDING_ADJUSTMENT] Mercury: Reduced by %s USD -> %s USD', transfer.amount, balances.mercury.USD);
+        balances.mercury.pendingReduction = (balances.mercury.pendingReduction || 0) + parseFloat(transfer.amount || 0);
+      }
+      
+      if (bankName.toLowerCase() === 'revolut' && balances.revolut) {
+        balances.revolut.USD = Math.max(0, parseFloat(balances.revolut.USD || 0) - parseFloat(transfer.amount || 0));
+        Logger.log('[PENDING_ADJUSTMENT] Revolut: Reduced by %s USD -> %s USD', transfer.amount, balances.revolut.USD);
+        balances.revolut.pendingReduction = (balances.revolut.pendingReduction || 0) + parseFloat(transfer.amount || 0);
+      }
+      
+      if (bankName.toLowerCase() === 'wise' && balances.wise) {
+        balances.wise.USD = Math.max(0, parseFloat(balances.wise.USD || 0) - parseFloat(transfer.amount || 0));
+        Logger.log('[PENDING_ADJUSTMENT] Wise: Reduced by %s USD -> %s USD', transfer.amount, balances.wise.USD);
+        balances.wise.pendingReduction = (balances.wise.pendingReduction || 0) + parseFloat(transfer.amount || 0);
+      }
+      
+      if (bankName.toLowerCase() === 'nexo' && balances.nexo) {
+        balances.nexo.USD = Math.max(0, parseFloat(balances.nexo.USD || 0) - parseFloat(transfer.amount || 0));
+        Logger.log('[PENDING_ADJUSTMENT] Nexo: Reduced by %s USD -> %s USD', transfer.amount, balances.nexo.USD);
+        balances.nexo.pendingReduction = (balances.nexo.pendingReduction || 0) + parseFloat(transfer.amount || 0);
+      }
+    }
+    
+    return balances;
+    
+  } catch (e) {
+    Logger.log('[ERROR] Failed to adjust balances for pending transfers: %s', e.message);
+    return balances;
+  }
+}
+
+function markTransferAsReceived_(transactionId, bankName) {
+  /*
+   * Mark a pending transfer as received/completed
+   * Removes it from pending transfers and logs the completion
+   */
+  try {
+    Logger.log('[TRANSFER_COMPLETE] Marking transfer %s (%s) as received', transactionId, bankName);
+    
+    // Remove from pending transfers
+    clearCompletedTransfer_(transactionId);
+    
+    // Log completion
+    Logger.log('[TRANSFER_COMPLETE] Transfer %s from %s marked as completed', transactionId, bankName || 'Unknown');
+    
+    return true;
+  } catch (e) {
+    Logger.log('[ERROR] Failed to mark transfer as received: %s', e.message);
+    return false;
+  }
+}
+
+function menuMarkTransferComplete() {
+  /*
+   * Menu function to manually mark transfers as received
+   * Useful when transfers arrive and need to be cleared from pending list
+   */
+  try {
+    var ui = SpreadsheetApp.getUi();
+    var transfers = getPendingTransfers_();
+    
+    if (transfers.length === 0) {
+      ui.alert('Complete Transfer', 'No pending transfers found.\n\nAll transfers are complete or none have been initiated recently.', ui.ButtonSet.OK);
+      return;
+    }
+    
+    // Show available transfers for selection
+    var transferOptions = [];
+    for (var i = 0; i < transfers.length; i++) {
+      var transfer = transfers[i];
+      var hoursSince = Math.floor((new Date().getTime() - new Date(transfer.timestamp).getTime()) / (1000 * 60 * 60));
+      var option = (transfer.bankName || 'Unknown') + ' $' + transfer.amount + ' ' + transfer.currency + ' (' + hoursSince + 'h ago) - ID: ' + transfer.transactionId;
+      transferOptions.push(option);
+    }
+    
+    // Create prompt for user to select which transfer to mark complete
+    var transferIndex = parseInt(promptUtilities.createNumberedPrompt('Select transfer to mark as received:', transferOptions)) - 1;
+    
+    if (transferIndex >= 0 && transferIndex < transfers.length) {
+      var selectedTransfer = transfers[transferIndex];
+      
+      var confirmResponse = ui.alert('Confirm Transfer Complete', 
+        'Mark this transfer as received?\n\n' + (selectedTransfer.bankName || 'Unknown') + ' $' + selectedTransfer.amount + ' ' + selectedTransfer.currency + '\nID: ' + selectedTransfer.transactionId + '\n\nThis will remove it from pending transfers.', 
+        ui.ButtonSet.YES_NO);
+      
+      if (confirmResponse === ui.Button.YES) {
+        var success = markTransferAsReceived_(selectedTransfer.transactionId, selectedTransfer.bankName);
+        
+        if (success) {
+          ui.alert('Transfer Completed', 'Transfer marked as received and removed from pending transfers.', ui.ButtonSet.OK);
+        } else {
+          ui.alert('Error', 'Failed to mark transfer as received. Please check logs.', ui.ButtonSet.OK);
+        }
+      } else {
+        ui.alert('Cancelled', 'Transfer completion marking was cancelled.', ui.ButtonSet.OK);
+      }
+    } else {
+      ui.alert('Invalid Selection', 'Invalid transfer selection.', ui.ButtonSet.OK);
+    }
+    
+  } catch (e) {
+    Logger.log('[ERROR] Menu mark transfer complete failed: %s', e.message);
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('❌ Transfer Completion Error', 'Failed to mark transfer complete:\n\n' + e.message, ui.ButtonSet.OK);
+  }
+}
+
+function autoDetectCompletedTransfers_() {
+  /*
+   * Auto-detect and mark transfers as completed based on account balance changes
+   * This doesn't actually check bank APIs, but provides a framework for doing so
+   */
+  try {
+    var pendingTransfers = getPendingTransfers_();
+    var completedTransfers = [];
+    
+    Logger.log('[AUTO_COMPLETE] Checking %s pending transfers for completion', pendingTransfers.length);
+    
+    // This would ideally check actual bank balances or transaction status
+    // For now, just clean up very old transfers (> 5 days)
+    var now = new Date().getTime();
+    for (var i = 0; i < pendingTransfers.length; i++) {
+      var transfer = pendingTransfers[i];
+      var transferDate = new Date(transfer.timestamp).getTime();
+      var daysSince = (now - transferDate) / (1000 * 60 * 60 * 24);
+      
+      if (daysSince > 5) {
+        Logger.log('[AUTO_COMPLETE] Transfer %s is %s days old - marking as timeout', transfer.transactionId, daysSince.toFixed(1));
+        completedTransfers.push(transfer.transactionId);
+      }
+    }
+    
+    // Mark detected transfers as complete
+    for (var j = 0; j < completedTransfers.length; j++) {
+      markTransferAsReceived_(completedTransfers[j], 'auto-timeout');
+    }
+    
+    return completedTransfers.length;
+    
+  } catch (e) {
+    Logger.log('[ERROR] Auto-detect completed transfers failed: %s', e.message);
+    return 0;
+  }
+}
+
+// Helper utility for numbered prompts 
+var promptUtilities = {
+  createNumberedPrompt: function(title, options) {
+    var ui = SpreadsheetApp.getUi();
+    var promptText = title + '\n\n';
+    
+    for (var i = 0; i < options.length; i++) {
+      promptText += (i + 1) + '. ' + options[i] + '\n';
+    }
+    
+    promptText += '\nEnter the number of your choice:';
+    
+    var response = ui.prompt(title, promptText, ui.ButtonSet.OK_CANCEL);
+    
+    if (response.getSelectedButton() === ui.Button.OK) {
+      return response.getResponseText();
+    } else {
+      return '-1'; // Cancelled
+    }
+  }
+};
+
+/* ============== Intelligent System Helper Functions ============== */
+function fetchAllBankUsdBalances_() {
+  /*
+   * STEP 1: Fetch USD balances from all banks
+   * Returns detailed balance information for each bank's Main account
+   */
+  var balances = {};
+  
+  try {
+    // Mercury Main Account Balance
+    Logger.log('[BALANCE_FETCH] Fetching Mercury Main account balance...');
+    balances.mercury = fetchMercuryMainBalance_();
+    Logger.log('[BALANCE_FETCH] Mercury Main: $%s USD', balances.mercury.USD);
+  } catch (e) {
+    Logger.log('[ERROR] Failed to fetch Mercury balance: %s', e.message);
+    balances.mercury = { USD: 0, EUR: 0, bankName: 'Mercury', error: e.message };
+  }
+  
+  try {
+    // Revolut Balance
+    Logger.log('[BALANCE_FETCH] Fetching Revolut balance...');
+    balances.revolut = fetchRevolutSummary_();
+    balances.revolut.bankName = 'Revolut';
+    Logger.log('[BALANCE_FETCH] Revolut: $%s USD', balances.revolut.USD);
+  } catch (e) {
+    Logger.log('[ERROR] Failed to fetch Revolut balance: %s', e.message);
+    balances.revolut = { USD: 0, EUR: 0, bankName: 'Revolut', error: e.message };
+  }
+  
+  try {
+    // Wise Balance
+    Logger.log('[BALANCE_FETCH] Fetching Wise balance...');
+    balances.wise = fetchWiseSummary_();
+    balances.wise.bankName = 'Wise';
+    Logger.log('[BALANCE_FETCH] Wise: $%s USD', balances.wise.USD);
+  } catch (e) {
+    Logger.log('[ERROR] Failed to fetch Wise balance: %s', e.message);
+    balances.wise = { USD: 0, EUR: 0, bankName: 'Wise', error: e.message };
+  }
+  
+  try {
+    // Nexo Balance
+    Logger.log('[BALANCE_FETCH] Fetching Nexo balance...');
+    balances.nexo = fetchNexoSummary_();
+    balances.nexo.bankName = 'Nexo';
+    Logger.log('[BALANCE_FETCH] Nexo: $%s USD', balances.nexo.USD);
+  } catch (e) {
+    Logger.log('[ERROR] Failed to fetch Nexo balance: %s', e.message);
+    balances.nexo = { USD: 0, EUR: 0, bankName: 'Nexo', error: e.message };
+  }
+  
+  // Adjust balances for pending transfers from previous consolidation systems
+  balances = adjustBalancesForPendingTransfers_(balances);
+  
+  return balances;
+}
+
+function performInternalConsolidation_(bankBalances, dryRun) {
+  /*
+   * STEP 2: Internal consolidation within each bank
+   * Move funds from sub-accounts to Main accounts within the same bank
+   */
+  Logger.log('[INTERNAL_CONSOLIDATION] Starting internal consolidation...');
+  
+  var result = {
+    totalMoved: 0,
+    consolidations: [],
+    errors: []
+  };
+  
+  // Mercury internal consolidation (move from other accounts to Main)
+  try {
+    Logger.log('[INTERNAL_CONSOLIDATION] Mercury internal consolidation...');
+    var mercuryResult = consolidateMercuryUsdFunds_(dryRun);
+    
+    if (mercuryResult.movedTotal > 0) {
+      result.totalMoved += mercuryResult.movedTotal;
+      result.consolidations.push({
+        bank: 'Mercury',
+        amount: mercuryResult.movedTotal,
+        sourceAccounts: mercuryResult.transfers.length,
+        transfers: mercuryResult.transfers
+      });
+      Logger.log('[INTERNAL_CONSOLIDATION] Mercury: Moved $%s USD internally', mercuryResult.movedTotal);
+    } else {
+      Logger.log('[INTERNAL_CONSOLIDATION] Mercury: No internal consolidation needed');
+    }
+  } catch (e) {
+    Logger.log('[ERROR] Mercury internal consolidation failed: %s', e.message);
+    result.errors.push('Mercury consolidation: ' + e.message);
+  }
+  
+  // Revolut internal consolidation (if needed)
+  try {
+    Logger.log('[INTERNAL_CONSOLIDATION] Revolut internal consolidation...');
+    var revolutResult = consolidateRevolutUsdFunds_(dryRun);
+    
+    if (revolutResult.movedTotal > 0) {
+      result.totalMoved += revolutResult.movedTotal;
+      result.consolidations.push({
+        bank: 'Revolut',
+        amount: revolutResult.movedTotal,
+        sourceAccounts: revolutResult.transfers.length,
+        transfers: revolutResult.transfers
+      });
+      Logger.log('[INTERNAL_CONSOLIDATION] Revolut: Moved $%s USD internally', revolutResult.movedTotal);
+    } else {
+      Logger.log('[INTERNAL_CONSOLIDATION] Revolut: No internal consolidation needed');
+    }
+  } catch (e) {
+    Logger.log('[ERROR] Revolut internal consolidation failed: %s', e.message);
+    result.errors.push('Revolut consolidation: ' + e.message);
+  }
+  
+  return result;
+}
+
+function performCrossBankTopup_(bankBalances, thresholdUsd, transferAmountUsd, dryRun) {
+  /*
+   * STEP 3: Cross-bank top-up based on thresholds
+   * Priority: Revolut -> Other banks, then Mercury -> Other banks if Revolut insufficient
+   */
+  Logger.log('[CROSS_BANK_TOPUP] Starting cross-bank transfers...');
+  
+  var result = {
+    totalMoved: 0,
+    topups: [],
+    errors: []
+  };
+  
+  // Identify banks that need top-up (below threshold)
+  var banksNeedingTopup = [];
+  var banksAboverThreshold = [];
+  
+  Object.keys(bankBalances).forEach(bankName => {
+    var balance = parseFloat(bankBalances[bankName].USD || 0);
+    if (balance < thresholdUsd) {
+      var shortfall = thresholdUsd - balance;
+      banksNeedingTopup.push({
+        bankName: bankName,
+        currentBalance: balance,
+        shortfall: shortfall,
+        topupAmount: transferAmountUsd
+      });
+      Logger.log('[CROSS_BANK_TOPUP] %s needs top-up: $%s (shortfall: $%s)', bankName, balance, shortfall);
+    } else {
+      banksAboverThreshold.push({
+        bankName: bankName,
+        currentBalance: balance,
+        surplus: balance - thresholdUsd
+      });
+      Logger.log('[CROSS_BANK_TOPUP] %s above threshold: $%s (surplus: $%s)', bankName, balance, balance - thresholdUsd);
+    }
+  });
+  
+  // If no banks need top-up, we're done
+  if (banksNeedingTopup.length === 0) {
+    Logger.log('[CROSS_BANK_TOPUP] No banks need top-up - all above threshold');
+    return result;
+  }
+  
+  // Find source banks for top-up (prioritize Revolut, then Mercury)
+  var sourceBankCandidates = [];
+  
+  // 1. Try Revolut first
+  var revolutBalance = parseFloat(bankBalances.revolut?.USD || 0);
+  if (revolutBalance >= thresholdUsd + transferAmountUsd) {
+    sourceBankCandidates.push({
+      bankName: 'Revolut',
+      balance: revolutBalance,
+      canSupply: revolutBalance - transferAmountUsd,
+      priority: 1
+    });
+  }
+  
+  // 2. Try Mercury as fallback
+  var mercuryBalance = parseFloat(bankBalances.mercury?.USD || 0);
+  if (mercuryBalance >= thresholdUsd + transferAmountUsd) {
+    sourceBankCandidates.push({
+      bankName: 'Mercury',
+      balance: mercuryBalance,
+      canSupply: mercuryBalance - transferAmountUsd,
+      priority: 2
+    });
+  }
+  
+  // Execute cross-bank transfers
+  for (var i = 0; i < banksNeedingTopup.length; i++) {
+    var bankToTopup = banksNeedingTopup[i];
+    var topupAmount = bankToTopup.topupAmount;
+    
+    // Find the best source bank for this top-up
+    var sourceBank = null;
+    for (var j = 0; j < sourceBankCandidates.length; j++) {
+      var candidate = sourceBankCandidates[j];
+      if (candidate.canSupply >= topupAmount) {
+        sourceBank = candidate;
+        break;
+      }
+    }
+    
+    if (!sourceBank) {
+      Logger.log('[WARNING] No bank can supply $%s for %s top-up', topupAmount, bankToTopup.bankName);
+      result.errors.push('Insufficient funds to top-up ' + bankToTopup.bankName + ' with $' + topupAmount);
+      continue;
+    }
+    
+    // Record the transfer
+    result.topups.push({
+      fromBank: sourceBank.bankName,
+      toBank: bankToTopup.bankName,
+      amount: topupAmount,
+      status: dryRun ? 'DRY_RUN' : 'PENDING'
+    });
+    
+    result.totalMoved += topupAmount;
+    
+    // Update source bank balance for next calculation
+    sourceBank.balance -= topupAmount;
+    sourceBank.canSupply = sourceBank.balance - thresholdUsd;
+    
+    Logger.log('[CROSS_BANK_TOPUP] %s -> %s: $%s USD (%s)', 
+               sourceBank.bankName, bankToTopup.bankName, topupAmount, dryRun ? 'DRY_RUN' : 'EXECUTED');
+  }
+  
+  return result;
+}
+
+function updateBalancesAfterInternalConsolidation_(bankBalances, internalResults) {
+  /*
+   * Update bank balances after internal consolidation moves
+   */
+  var updatedBalances = Object.assign({}, bankBalances);
+  
+  // Add consolidated amounts to Main accounts
+  internalResults.consolidations.forEach(consolidation => {
+    var bankName = consolidation.bank.toLowerCase();
+    if (updatedBalances[bankName]) {
+      var newBalance = parseFloat(updatedBalances[bankName].USD || 0) + consolidation.amount;
+      updatedBalances[bankName].USD = newBalance;
+      Logger.log('[BALANCE_UPDATE] %s balance updated: $%s USD (after internal consolidation)', bankName, newBalance);
+    }
+  });
+  
+  return updatedBalances;
+}
+
+function getFinalMainAccountBalances_(bankBalances, internalResults, topupResults) {
+  /*
+   * Calculate final Main account balances after all operations
+   */
+  var finalBalances = {};
+  
+  // Start with current balances
+  Object.keys(bankBalances).forEach(bankName => {
+    finalBalances[bankName] = parseFloat(bankBalances[bankName].USD || 0);
+  });
+  
+  // Add internal consolidation results
+  internalResults.consolidations.forEach(consolidation => {
+    var bankName = consolidation.bank.toLowerCase();
+    if (finalBalances[bankName] !== undefined) {
+      finalBalances[bankName] += consolidation.amount;
+    }
+  });
+  
+  // Add/subtract cross-bank transfers
+  topupResults.topups.forEach(topup => {
+    var fromBank = topup.fromBank.toLowerCase();
+    var toBank = topup.toBank.toLowerCase();
+    
+    if (finalBalances[fromBank] !== undefined) {
+      finalBalances[fromBank] -= topup.amount;
+    }
+    if (finalBalances[toBank] !== undefined) {
+      finalBalances[toBank] += topup.amount;
+    }
+  });
+  
+  return finalBalances;
+}
+
+/* ============== Legacy Fund Consolidation System (Backwards Compatibility) ============== */
 function consolidateUsdFundsToMain_(options) {
   Logger.log('=== STARTING FUND CONSOLIDATION ===');
   Logger.log('[FUND_CONSOLIDATION] Starting USD fund consolidation (dryRun: %s)', options.dryRun);
+  
+  // Check for pending transfers before starting
+  var hasPendingTransfers = checkPendingTransfers_();
+  if (hasPendingTransfers && !options.force) {
+    Logger.log('[FUND_CONSOLIDATION] Skipping consolidation - pending transfers detected');
+    return {
+      skipped: true,
+      reason: 'Pending transfers detected',
+      pendingTransfers: getPendingTransfers_(),
+      totalProcessed: 0,
+      totalFound: 0,
+      movedTotal: 0,
+      errors: ['Consolidation skipped due to pending transfers']
+    };
+  }
   
   var result = {
     totalProcessed: 0,
@@ -889,6 +1716,13 @@ function consolidateRevolutUsdFunds_(dryRun) {
               transfer.status = 'success';
               transfer.transactionId = transferResult.transfer.id;
               result.movedTotal += usdBalance;
+              
+              // Track pending transfers (Revolut transfers are usually processing)
+              var transferStatus = transferResult.transfer.status || 'processing';
+              if (transferStatus === 'processing' || transferStatus === 'pending') {
+                addPendingTransfer_('Revolut_' + accountName, usdBalance, 'USD', transferResult.transfer.id, 'Revolut');
+              }
+              
               Logger.log('[REVOLUT_FUNDS] Successfully moved $%s USD from %s to Main', usdBalance, accountName);
             } else {
               transfer.status = 'failed';
@@ -926,8 +1760,18 @@ function consolidateMercuryUsdFunds_(dryRun) {
   };
   
   try {
-    var accounts = getMercuryAccounts_();
-    Logger.log('[FUND_CONSOLIDATION] Mercury: Retrieved %s accounts', accounts.length);
+    // Get detailed Mercury accounts for proper consolidation
+    Logger.log('[MERCURY_CONSOLIDATION] Fetching detailed Mercury accounts for consolidation...');
+    var accountsData = httpProxyJson_('/mercury/accounts');
+    
+    if (!accountsData || !Array.isArray(accountsData.accounts)) {
+      Logger.log('[ERROR] Mercury accounts endpoint not available for consolidation');
+      result.errors.push('Mercury accounts endpoint not available');
+      return result;
+    }
+    
+    var accounts = accountsData.accounts;
+    Logger.log('[MERCURY_CONSOLIDATION] Retrieved %s detailed Mercury accounts', accounts.length);
     
     for (var i = 0; i < accounts.length; i++) {
       var account = accounts[i];
@@ -936,24 +1780,33 @@ function consolidateMercuryUsdFunds_(dryRun) {
       
       result.processed++;
       
-      // Skip Main account (Mercury summary represents Main account balance)
-      if (accountName.toLowerCase() === 'main' || accountName.toLowerCase().includes('mercury main') || accountId === 'main' || accountId === 'mercury-main') {
-        Logger.log('[MERCURY_FUNDS] Skipping Main account: %s', accountName);
+      // Identify and skip Main account (Mercury Checking ••2290)
+      var currency = account.currency || 'USD';
+      var isMainAccount = (
+        account.name?.includes('2290') || 
+        account.nickname?.includes('2290') ||
+        account.isMainAccount === true ||
+        account.nickname?.toLowerCase().includes('main')
+      );
+      
+      // Skip non-USD accounts
+      if (currency.toUpperCase() !== 'USD') {
+        Logger.log('[MERCURY_CONSOLIDATION] Skipping non-USD account: %s (%s)', accountName, currency);
         continue;
       }
       
-      // Check USD balance (use provided balance for Mercury summary accounts)
+      if (isMainAccount) {
+        Logger.log('[MERCURY_CONSOLIDATION] Skipping Main account: %s', accountName);
+        continue;
+      }
+      
+      // Use actual balance from detailed account data
       try {
-        var usdBalance;
+        var balance = account.balance || 0;
+        var availableBalance = account.availableBalance || balance;
+        var usdBalance = availableBalance;
         
-        // For Mercury summary accounts, use the balance directly from account data
-        if (account.summary && account.summary.USD) {
-          usdBalance = Number(account.balance || 0);
-          Logger.log('[MERCURY_FUNDS] Using summary balance for %s: $%s USD', accountName, usdBalance);
-        } else {
-          usdBalance = getMercuryAccountBalance_(accountId, 'USD');
-          Logger.log('[MERCURY_FUNDS] Account %s USD balance: $%s', accountName, usdBalance);
-        }
+        Logger.log('[MERCURY_CONSOLIDATION] Account %s: $%s USD (available: $%s)', accountName, balance, availableBalance);
         
         if (usdBalance > 0) {
           result.foundTotal += usdBalance;
@@ -969,7 +1822,23 @@ function consolidateMercuryUsdFunds_(dryRun) {
           
           if (!dryRun) {
             try {
-              Logger.log('[MERCURY_FUNDS] Attempting to consolidate $%s USD from Mercury accounts (%s)', usdBalance, accountName);
+              Logger.log('[MERCURY_CONSOLIDATION] Attempting to consolidate $%s USD from %s to Main Account', usdBalance, accountName);
+              
+              // Find the Main account ID for the transfer
+              var mainAccountId = null;
+              for (var j = 0; j < accounts.length; j++) {
+                var acc = accounts[j];
+                if (acc.name?.includes('2290') || acc.isMainAccount === true) {
+                  mainAccountId = acc.id;
+                  break;
+                }
+              }
+              
+              if (!mainAccountId) {
+                Logger.log('[ERROR] Main account ID not found for transfer');
+                throw new Error('Main account ID not found');
+              }
+              
               var transferResult = mercuryTransferToMain_(accountId, usdBalance, 'USD', 'Consolidate USD funds to Main');
               
               if (transferResult && transferResult.transfer && transferResult.transfer.status) {
@@ -977,6 +1846,12 @@ function consolidateMercuryUsdFunds_(dryRun) {
                   transfer.status = 'success';
                   transfer.transactionId = transferResult.transfer.id;
                   result.movedTotal += usdBalance;
+                  
+                  // Track pending transfers (except for completed ones)
+                  if (transferResult.transfer.status === 'processing') {
+                    addPendingTransfer_(accountId, usdBalance, 'USD', transferResult.transfer.id, 'Mercury');
+                  }
+                  
                   Logger.log('[MERCURY_FUNDS] Successfully moved $%s USD from %s to Main', usdBalance, accountName);
                 } else {
                   transfer.status = 'failed';
@@ -1408,13 +2283,21 @@ function updateAllBalances() {
       Logger.log('[ERROR] Mercury balance update failed: %s', e.message);
     }
     
-    // Update Airwallex
+    // Update Airwallex - DISABLED due to API access issues
+    // try {
+    //   var airwallexSummary = fetchAirwallexSummary_();
+    //   updateBankBalance_(sh, 'Airwallex', airwallexSummary, 'Airwallex balance update');
+    //   totalUpdated++;
+    // } catch (e) {
+    //   Logger.log('[ERROR] Airwallex balance update failed: %s', e.message);
+    // }
+    
+    // Set Airwallex balance to zero
     try {
-      var airwallexSummary = fetchAirwallexSummary_();
-      updateBankBalance_(sh, 'Airwallex', airwallexSummary, 'Airwallex balance update');
+      updateBankBalance_(sh, 'Airwallex', { USD: 0, EUR: 0 }, 'Airwallex disabled');
       totalUpdated++;
     } catch (e) {
-      Logger.log('[ERROR] Airwallex balance update failed: %s', e.message);
+      Logger.log('[ERROR] Airwallex placeholder update failed: %s', e.message);
     }
     
     // Update Revolut
@@ -1490,11 +2373,18 @@ function onOpen() {
   var ui = SpreadsheetApp.getUi();
   
   ui.createMenu('🏦 Banking')
-    .addItem('💰 Update All Balances', 'updateAllBalances')
-    .addItem('📊 Bank Account Summary', 'getBankAccountSummary')
+    // Balance Monitoring
+    .addItem('💰 Check USD Balances', 'menuCheckUSDBalances')
+    .addItem('🏦 Check Individual Banks', 'menuCheckIndividualBanks')
+    .addItem('📊 Show Balance Summary', 'menuShowBalanceSummary')
+    .addItem('🔄 Update All Balances', 'menuUpdateAllBalances')
     .addSeparator()
+    // Auto Topup
     .addItem('🔍 Check Minimum Balances (Dry Run)', 'dryRunCheckAllBankMinimumBalances')
     .addItem('💳 Auto-Topup Low Balances', 'checkAllBankMinimumBalances')
+    .addSeparator()
+    // Clear outputs
+    .addItem('❌ Clear Outputs', 'menuClearOutputs')
     .addToUi();
     
   ui.createMenu('💰 Payments')
@@ -1504,7 +2394,8 @@ function onOpen() {
     .addItem('🧪 Dry Run Previous Month', 'dryRunPayUsersForPreviousMonth') 
     .addItem('💰 Pay Previous Month', 'payUsersForPreviousMonth')
     .addSeparator()
-    .addItem('🗓️ Select Custom Month', 'selectCustomMonthMenu')
+    .addItem('🗓️ Dry Run Specific Month', 'menuDryRunSpecificMonth')
+    .addItem('🗓️ Pay Specific Month', 'menuPaySpecificMonth')
     .addSeparator()
     .addItem('🔍 Check Status', 'getCurrentMonthStatus')
     .addItem('🧪 Test Payment System', 'testPaymentSystem')
@@ -1516,15 +2407,20 @@ function onOpen() {
     .addToUi();
     
   ui.createMenu('🔄 Consolidation')
-    .addItem('💰 Consolidate Funds → Main', 'consolidateFundsMenu')
-    .addItem('🧪 Test Consolidation', 'runTestFundConsolidation')
-    .addSeparator()
-    .addItem('🚀 Test Daily Consolidation Trigger', 'testDailyConsolidationTrigger')
-    .addItem('💰 Test Balance Update Trigger', 'testBalanceUpdateTrigger')
-    .addItem('🔍 Mercury API Discovery', 'testMercuryApiDiscovery')
-    .addSeparator()
-    .addItem('🧪 Test Minimum Balance Trigger', 'testMinimumBalanceTrigger')
-    .addToUi();
+   .addItem('💰 Consolidate Funds → Main', 'menuExecuteConsolidation')
+   .addItem('🧪 Test Consolidation', 'menuTestConsolidation')
+   .addItem('📋 Show Available Banks', 'menuShowAvailableBanks')
+   .addSeparator()
+         .addItem('⏳ Check Pending Transfers', 'menuCheckPendingTransfers')
+         .addItem('✅ Mark Transfer Complete', 'menuMarkTransferComplete')
+         .addItem('🗑️ Clear Old Transfers', 'menuClearOldTransfers')
+   .addSeparator()
+   .addItem('🚀 Test Daily Consolidation Trigger', 'testDailyConsolidationTrigger')
+   .addItem('💰 Test Balance Update Trigger', 'testBalanceUpdateTrigger')
+   .addItem('🔍 Mercury API Discovery', 'testMercuryApiDiscovery')
+   .addSeparator()
+   .addItem('🧪 Test Minimum Balance Trigger', 'testMinimumBalanceTrigger')
+   .addToUi();
     
 }
 
@@ -1905,22 +2801,90 @@ function getBankAccountSummary() {
       summaries.mercury = { USD: 0, EUR: 0 };
     }
     
+    // Airwallex disabled due to API access issues
+    summaries.airwallex = { USD: 0, EUR: 0 };
+    
     // Calculate totals
-    var totalUsd = summaries.revolut.USD + summaries.mercury.mainUsd;
+    var totalUsd = summaries.revolut.USD + summaries.mercury.mainUsd + summaries.airwallex.USD;
+    var totalEur = summaries.revolut.EUR + summaries.airwallex.EUR;
     
     var summaryText = '🏦 BANK ACCOUNT SUMMARY\\n\\n' +
-      '💵 TOTAL USD BALANCE: $' + totalUsd.toFixed(2) + '\\n\\n' +
+      '💵 TOTAL USD BALANCE: $' + totalUsd.toFixed(2) + '\\n' +
+      '💶 TOTAL EUR BALANCE: €' + totalEur.toFixed(2) + '\\n\\n' +
       '📱 Revolut: $' + summaries.revolut.USD.toFixed(2) + ' USD, €' + summaries.revolut.EUR.toFixed(2) + ' EUR\\n' +
-      '🏦 Mercury: $' + summaries.mercury.mainUsd.toFixed(2) + ' USD (in Main)\\n\\n' +
+      '🏦 Mercury: $' + summaries.mercury.mainUsd.toFixed(2) + ' USD (in Main)\\n' +
+      '🏢 Airwallex: $' + summaries.airwallex.USD.toFixed(2) + ' USD, €' + summaries.airwallex.EUR.toFixed(2) + ' EUR\\n\\n' +
       '📊 Currency Distribution:\\n' +
       '   USD: $' + totalUsd.toFixed(2) + '\\n' +
-      '   EUR: €' + summaries.revolut.EUR.toFixed(2);
+      '   EUR: €' + totalEur.toFixed(2);
     
     ui.alert('Bank Account Summary', summaryText, ui.ButtonSet.OK);
     
   } catch (e) {
     Logger.log('[ERROR] Bank account summary failed: %s', e.message);
     SpreadsheetApp.getUi().alert('Error', 'Failed to get bank account summary: ' + e.message, SpreadsheetApp.getUi().ButtonSet.OK);
+  }
+}
+
+function testAirwallexApiDirect() {
+  Logger.log('=== TESTING AIRWALLEX API DIRECT CONNECTION ===');
+  try {
+    // Test the authentication
+    var clientId = getProp_('AIRWALLEX_CLIENT_ID');
+    var clientSecret = getProp_('AIRWALLEX_CLIENT_SECRET');
+    
+    Logger.log('[TEST] Available credentials:');
+    Logger.log('[TEST] Client ID: %s', clientId ? clientId.substring(0, 8) + '...' : 'NOT SET');
+    Logger.log('[TEST] Client Secret: %s', clientSecret ? 'SET' : 'NOT SET');
+    
+    if (!clientId || !clientSecret) {
+      Logger.log('[ERROR] Missing Airwallex credentials!');
+      Logger.log('[ERROR] Please set AIRWALLEX_CLIENT_ID and AIRWALLEX_CLIENT_SECRET in Script Properties');
+      return false;
+    }
+    
+    // Test authentication
+    Logger.log('[TEST] Step 1: Testing authentication...');
+    var authResult = airwallexAuthenticate_(clientId, clientSecret);
+    
+    if (!authResult.success) {
+      Logger.log('[ERROR] Authentication failed: %s', authResult.error);
+      return false;
+    }
+    
+    Logger.log('[TEST] ✅ Authentication successful!');
+    
+    // Test balance fetching
+    Logger.log('[TEST] Step 2: Testing balance fetching...');
+    var balances = airwallexGetBalances_(authResult.token);
+    
+    Logger.log('[TEST] ✅ Retrieved %s balance entries', balances.length);
+    
+    // Test summary generation
+    Logger.log('[TEST] Step 3: Testing summary generation...');
+    var summary = fetchAirwallexSummary_();
+    
+    Logger.log('[TEST] ✅ Summary generated: %s', JSON.stringify(summary));
+    
+    var ui = SpreadsheetApp.getUi();
+    var message = 'Airwallex Direct API Test Results:\\n\\n' +
+      '✅ Authentication: SUCCESS\\n' +
+      '✅ Balance Fetch: ' + balances.length + ' entries\\n' +
+      '✅ Summary: $' + summary.USD + ' USD, €' + summary.EUR + ' EUR\\n' +
+      '📊 Total Accounts: ' + summary.count;
+      
+    ui.alert('Airwallex API Test', message, ui.ButtonSet.OK);
+    
+    return true;
+    
+  } catch (e) {
+    Logger.log('[ERROR] Airwallex API test failed: %s', e.message);
+    Logger.log('[ERROR] Stack trace: %s', e.stack);
+    
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Airwallex API Test Failed', 'Error: ' + e.message, ui.ButtonSet.OK);
+    
+    return false;
   }
 }
 
@@ -1967,21 +2931,99 @@ function testMercuryApiDiscovery() {
 
 function testDailyConsolidationTrigger() {
   try {
-    Logger.log('=== TESTING DAILY CONSOLIDATION TRIGGER ===');
-    var result = TRIGGER_consolidateUsdFundsToMainDaily();
+    Logger.log('=== TESTING INTELLIGENT DAILY CONSOLIDATION TRIGGER ===');
     
-    var message = '🚀 DAILY CONSOLIDATION TRIGGER TEST\\n\\n' +
-      'Status: ' + (result.success ? '✅ Success' : '❌ Failed') + '\\n' +
-      'Message: ' + result.message + '\\n' +
-      'Timestamp: ' + result.timestamp;
+    // Test the intelligent consolidation system (dry run)
+    var result = intelligentConsolidationSystem_({ dryRun: true, force: false });
+    Logger.log('[DAILY_TRIGGER_TEST] Intelligent consolidation result: %s', JSON.stringify(result, null, 2));
     
-    SpreadsheetApp.getUi().alert('Daily Trigger Test', message, SpreadsheetApp.getUi().ButtonSet.OK);
+    var message = '🚀 DAILY INTELLIGENT CONSOLIDATION TEST\\n\\n';
+    
+    if (result.status === 'SUCCESS') {
+      message += '✅ SUCCESS: Ready for daily automation\\n\\n';
+      
+      if (result.summary.totalUsdConsolidated > 0) {
+        message += '📁 Internal Consolidation: $' + result.summary.totalUsdConsolidated.toFixed(2) + ' USD ready\\n';
+      }
+      
+      if (result.summary.totalUsdTransferred > 0) {
+        message += '🔄 Cross-Bank Top-up: $' + result.summary.totalUsdTransferred.toFixed(2) + ' USD planned\\n';
+      }
+      
+      if (result.summary.totalUsdConsolidated === 0 && result.summary.totalUsdTransferred === 0) {
+        message += 'ℹ️ No actions needed - all balances optimal\\n';
+      }
+      
+      message += '\\n🏦 FINAL BALANCES:\\n';
+      Object.keys(result.summary.mainAccountBalances).forEach(bankName => {
+        var balance = result.summary.mainAccountBalances[bankName];
+        var statusIcon = balance >= result.thresholdUsd ? '✅' : '🚨';
+        message += statusIcon + ' ' + bankName.charAt(0).toUpperCase() + bankName.slice(1) + ': $' + balance.toFixed(2) + '\\n';
+      });
+      
+    } else if (result.status === 'SKIPPED') {
+      message += '⏸️ SKIPPED: Pending transfers detected (' + (result.pendingTransfers?.length || 0) + ' transfers)\\n\\n';
+      message += '⏰ Will retry when transfers complete';
+      
+    } else {
+      message += '❌ ERROR: ' + result.error + '\\n\\n';
+      message += '⚠️ Daily automation may need manual attention';
+    }
+    
+    message += '\\n\\n📋 Threshold: $' + result.thresholdUsd + ' USD';
+    message += '\\n💰 Transfer Amount: $' + result.transferAmountUsd + ' USD';
+    message += '\\n⏰ Timestamp: ' + result.timestamp;
+    
+    SpreadsheetApp.getUi().alert('🚀 Daily Trigger Test', message, SpreadsheetApp.getUi().ButtonSet.OK);
     
   } catch (e) {
     Logger.log('[ERROR] Daily consolidation trigger test failed: %s', e.message);
-    SpreadsheetApp.getUi().alert('Trigger Test Failed', 'Daily consolidation trigger test failed: ' + e.message, SpreadsheetApp.getUi().ButtonSet.OK);
+    SpreadsheetApp.getUi().alert('Trigger Test Failed', 'Daily intelligent consolidation test failed: ' + e.message, SpreadsheetApp.getUi().ButtonSet.OK);
   }
+
 }
+
+function testIntelligentConsolidationManual() {
+  /*
+   * Manual test function for intelligent consolidation system
+   * Execute from Apps Script editor or menu
+   */
+  Logger.log('[MANUAL_TEST] Starting intelligent consolidation manual test...');
+  
+  try {
+    var result = intelligentConsolidationSystem_({ dryRun: true, force: true });
+    
+    Logger.log('[MANUAL_TEST] RESULT STRUCTURE:');
+    Logger.log('[MANUAL_TEST] Status: %s', result.status);
+    Logger.log('[MANUAL_TEST] Threshold: $%s USD', result.thresholdUsd);
+    Logger.log('[MANUAL_TEST] Transfer Amount: $%s USD', result.transferAmountUsd);
+    
+    if (result.steps.step1_fetchBalances) {
+      Logger.log('[MANUAL_TEST] Step 1 - Bank Balances Fetched: %s banks', Object.keys(result.steps.step1_fetchBalances).length);
+    }
+    
+    if (result.steps.step2_internalConsolidation) {
+      Logger.log('[MANUAL_TEST] Step 2 - Internal Consolidations: %s', result.steps.step2_internalConsolidation.totalMoved)
+    }
+    
+    if (result.steps.step3_crossBankTopup) {
+      Logger.log('[MANUAL_TEST] Step 3 - Cross-Bank Transfers: %s', result.steps.step3_crossBankTopup.totalMoved);
+    }
+    
+    if (result.summary.mainAccountBalances) {
+      Logger.log('[MANUAL_TEST] Final Balances:');
+      Object.keys(result.summary.mainAccountBalances).forEach(bankName => {
+        Logger.log('[MANUAL_TEST]   %s: $%s USD', bankName, result.summary.mainAccountBalances[bankName]);
+      });
+    }
+    
+    Logger.log('[MANUAL_TEST] Manual test completed successfully');
+    return result;
+    
+  } catch (e) {
+    Logger.log('[ERROR] Manual test failed: %s', e.message);
+    throw e;
+  }
 
 function testBalanceUpdateTrigger() {
   try {
@@ -1998,6 +3040,171 @@ function testBalanceUpdateTrigger() {
   } catch (e) {
     Logger.log('[ERROR] Balance update trigger test failed: %s', e.message);
     SpreadsheetApp.getUi().alert('Trigger Test Failed', 'Balance update trigger test failed: ' + e.message, SpreadsheetApp.getUi().ButtonSet.OK);
+  }
+}
+
+/* ============== Transfer Tracking System ============== */
+/*
+ * FUTURE BANK INTEGRATION GUIDE:
+ * 
+ * When adding new banks, follow this pattern:
+ * 
+ * 1. In your bank's transfer function, track pending transfers:
+ *    addPendingTransfer_(accountId, amount, currency, transactionId, 'YourBankName');
+ * 
+ * 2. The transfer object structure is:
+ *    {
+ *      accountId: 'unique_account_identifier',
+ *      amount: number,
+ *      currency: 'USD' | 'EUR' | etc,
+ *      transactionId: 'bank_transaction_id',
+ *      bankName: 'YourBankName', // ← This helps identify which bank
+ *      timestamp: '2024-01-01T12:00:00.000Z'
+ *    }
+ * 
+ * 3. Transfer tracking is automatic after calling addPendingTransfer_():
+ *    - Consolidation will skip if any pending transfers exist
+ *    - Menu shows bank-specific transfer details
+ *    - Automatic cleanup after 72 hours
+ * 
+ * SUPPORTED BANKS (as of implementation):
+ * - Mercury: Mercury bank transfers
+ * - Revolut: Revolut bank transfers  
+ * - Add more banks following the same pattern
+ */
+function checkPendingTransfers_() {
+  try {
+    var pendingTransfers = getProp_('pending_transfers');
+    if (!pendingTransfers) {
+      Logger.log('[TRANSFER_TRACKING] No pending transfers found');
+      return false;
+    }
+    
+    var transfers = JSON.parse(pendingTransfers);
+    var now = new Date().getTime();
+    var validTransfers = [];
+    
+    // Clean up old transfers (older than 72 hours)
+    for (var i = 0; i < transfers.length; i++) {
+      var transfer = transfers[i];
+      var transferDate = new Date(transfer.timestamp).getTime();
+      var hoursSince = (now - transferDate) / (1000 * 60 * 60);
+      
+      if (hoursSince < 72) { // Keep transfers less than 72 hours old
+        validTransfers.push(transfer);
+      } else {
+        Logger.log('[TRANSFER_TRACKING] Cleaning up old transfer: %s (%s hours old)', transfer.accountId, hoursSince.toFixed(1));
+      }
+    }
+    
+    // Update the stored transfers
+    setProp_('pending_transfers', JSON.stringify(validTransfers));
+    
+    var hasPending = validTransfers.length > 0;
+    if (hasPending) {
+      Logger.log('[TRANSFER_TRACKING] Found %s pending transfers', validTransfers.length);
+      for (var j = 0; j < validTransfers.length; j++) {
+        var transfer = validTransfers[j];
+        var transferDate = new Date(transfer.timestamp);
+        var hoursSince = (now - new Date(transfer.timestamp).getTime()) / (1000 * 60 * 60);
+        Logger.log('[TRANSFER_TRACKING]   %s %s: $%s %s (%s hours ago)', transfer.bankName || 'Unknown', transfer.accountId, transfer.amount, transfer.currency, hoursSince.toFixed(1));
+      }
+    }
+    
+    return hasPending;
+  } catch (e) {
+    Logger.log('[ERROR] checkPendingTransfers_ failed: %s', e.message);
+    return false;
+  }
+}
+
+function addPendingTransfer_(accountId, amount, currency, transactionId, bankName) {
+  try {
+    var pendingTransfers = [];
+    var existing = getProp_('pending_transfers');
+    if (existing) {
+      pendingTransfers = JSON.parse(existing);
+    }
+    
+    var transfer = {
+      accountId: accountId,
+      amount: amount,
+      currency: currency,
+      transactionId: transactionId,
+      bankName: bankName || 'Unknown', // Track which bank for future extensibility
+      timestamp: new Date().toISOString()
+    };
+    
+    pendingTransfers.push(transfer);
+    setProp_('pending_transfers', JSON.stringify(pendingTransfers));
+    
+    Logger.log('[TRANSFER_TRACKING] Added pending transfer: %s %s $%s %s (ID: %s)', bankName || 'Unknown', accountId, amount, currency, transactionId);
+    
+  } catch (e) {
+    Logger.log('[ERROR] addPendingTransfer_ failed: %s', e.message);
+  }
+}
+
+function getPendingTransfers_() {
+  try {
+    var pendingTransfers = getProp_('pending_transfers');
+    return pendingTransfers ? JSON.parse(pendingTransfers) : [];
+  } catch (e) {
+    Logger.log('[ERROR] getPendingTransfers_ failed: %s', e.message);
+    return [];
+  }
+}
+
+function clearCompletedTransfer_(transactionId) {
+  try {
+    var pendingTransfers = getProp_('pending_transfers');
+    if (!pendingTransfers) return;
+    
+    var transfers = JSON.parse(pendingTransfers);
+    var filtered = transfers.filter(t => t.transactionId !== transactionId);
+    
+    setProp_('pending_transfers', JSON.stringify(filtered));
+    Logger.log('[TRANSFER_TRACKING] Cleared completed transfer: %s', transactionId);
+    
+  } catch (e) {
+    Logger.log('[ERROR] clearCompletedTransfer_ failed: %s', e.message);
+  }
+}
+
+/* ============== Helper Functions for Future Banks ============== */
+function logBankIntegration_(bankName, transferResult, accountId, amount, currency) {
+  /*
+   * Helper function for future bank integrations
+   * 
+   * Usage in your new bank's transfer function:
+   * 
+   * if (transferResult.status === 'processing' || transferResult.status === 'pending') {
+   *   addPendingTransfer_(accountId, amount, currency, transferResult.id, bankName);
+   * }
+   * 
+   * Then call this function for logging:
+   * logBankIntegration_(bankName, transferResult, accountId, amount, currency);
+   */
+  
+  Logger.log('[%s_TRANSFER] Transfer %s: %s $%s %s -> %s (Status: %s, ID: %s)', 
+             bankName.toUpperCase(), 
+             transferResult.status === 'processing' ? 'INITIATED' : 'COMPLETED',
+             accountId, amount, currency,
+             transferResult.status,
+             transferResult.id || 'no-id');
+}
+
+function getTransfersByBank_(bankName) {
+  /*
+   * Get all pending transfers for a specific bank
+   * Useful for bank-specific consolidation logic
+   */
+  try {
+    var allTransfers = getPendingTransfers_();
+    return allTransfers.filter(t => t.bankName === bankName);
+  } catch (e) {
+    Logger.log('[ERROR] getTransfersByBank_ failed for %s: %s', bankName, e.message);
+    return [];
   }
 }
 
@@ -2408,3 +3615,1034 @@ function testPaymentSystem() {
  * 
  * This single file now contains complete functionality while eliminating code duplication!
  *******************************************************************************************************/
+
+/* ============== USD BALANCE MONITORING ============== */
+function checkUSDBalanceThreshold(suppressAlert) {
+  try {
+    Logger.log('[USD_MONITOR] Starting USD balance threshold check...');
+    
+    const THRESHOLD_USD = 1000;
+    var ui = SpreadsheetApp.getUi();
+    
+    // Get Mercury MAIN account balance (not total across all accounts)
+    var mercurySummary = { USD: 0, EUR: 0 };
+    try {
+      mercurySummary = fetchMercuryMainBalance_();
+      Logger.log('[USD_MONITOR] Mercury Main Account: $%s (%s)', mercurySummary.USD, mercurySummary.note || 'balance retrieved');
+    } catch (e) {
+      Logger.log('[ERROR] Mercury Main balance failed: %s', e.message);
+    }
+    
+    // Get Revolut balance  
+    var revolutSummary = { USD: 0, EUR: 0 };
+    try {
+      revolutSummary = fetchRevolutSummary_();
+      Logger.log('[USD_MONITOR] Revolut: $%s', revolutSummary.USD);
+    } catch (e) {
+      Logger.log('[ERROR] Revolut summary failed: %s', e.message);
+    }
+    
+    Logger.log('[USD_MONITOR] Individual bank threshold check...');
+    Logger.log('[USD_MONITOR] Threshold per bank: $%s', THRESHOLD_USD);
+    
+    var hasLowBalance = false;
+    var alertDetails = '';
+    
+    // Check Mercury independently
+    Logger.log('[USD_MONITOR] Checking Mercury: $%s', mercurySummary.USD);
+    var mercuryStatus = '';
+    if (parseFloat(mercurySummary.USD) < THRESHOLD_USD) {
+      var shortfall = THRESHOLD_USD - parseFloat(mercurySummary.USD);
+      mercuryStatus = 'LOW ($' + parseFloat(mercurySummary.USD).toFixed(2) + ', -$' + shortfall.toFixed(2) + ')';
+      alertDetails += 'MERCURY: Below threshold (-$' + shortfall.toFixed(2) + ')\n';
+      hasLowBalance = true;
+    } else {
+      var surplus = parseFloat(mercurySummary.USD) - THRESHOLD_USD;
+      mercuryStatus = 'OK (+$' + surplus.toFixed(2) + ')';
+    }
+    
+    // Check Revolut independently
+    Logger.log('[USD_MONITOR] Checking Revolut: $%s', revolutSummary.USD);
+    var revolutStatus = '';
+    if (parseFloat(revolutSummary.USD) < THRESHOLD_USD) {
+      var shortfall = THRESHOLD_USD - parseFloat(revolutSummary.USD);
+      revolutStatus = 'LOW ($' + parseFloat(revolutSummary.USD).toFixed(2) + ', -$' + shortfall.toFixed(2) + ')';
+      alertDetails += 'REVOLUT: Below threshold (-$' + shortfall.toFixed(2) + ')\n';
+      hasLowBalance = true;
+    } else {
+      var surplus = parseFloat(revolutSummary.USD) - THRESHOLD_USD;
+      revolutStatus = 'OK (+$' + surplus.toFixed(2) + ')';
+    }
+    
+    Logger.log('[USD_MONITOR] Mercury Status: %s', mercuryStatus);
+    Logger.log('[USD_MONITOR] Revolut Status: %s', revolutStatus);
+    
+    // Overall result
+    if (hasLowBalance) {
+      var alertMessage = '🚨 BANK BALANCE ALERT!\n\n' +
+        '🎯 Threshold per bank: $' + THRESHOLD_USD + '\n\n' +
+        '🏦 Mercury Main: $' + mercurySummary.USD + ' ' + ('OK' === mercuryStatus.split(' ')[0] ? '✅' : '🚨') + '\n' +
+        '🏦 Revolut: $' + revolutSummary.USD + ' ' + ('OK' === revolutStatus.split(' ')[0] ? '✅' : '🚨') + '\n\n' +
+        alertDetails.trim() + '\n\n⚠️ Consider topping up low accounts!';
+      
+      Logger.log('[ALERT] One or more banks below $%s threshold', THRESHOLD_USD);
+      
+      // Only show alert for automatic triggers, not menu calls
+      if (!suppressAlert) {
+        ui.alert('Bank Balance Alert', alertMessage, ui.ButtonSet.OK);
+      }
+      
+      return {
+        status: 'ALERT',
+        mercury: {
+          balance: parseFloat(mercurySummary.USD),
+          status: mercuryStatus.split(' ')[0],
+          threshold: THRESHOLD_USD
+        },
+        revolut: {
+          balance: parseFloat(revolutSummary.USD),
+          status: revolutStatus.split(' ')[0],
+          threshold: THRESHOLD_USD
+        },
+        alert: alertDetails.trim()
+      };
+    } else {
+      Logger.log('[GOOD] All banks above $%s threshold', THRESHOLD_USD);
+      
+      return {
+        status: 'OK',
+        mercury: {
+          balance: parseFloat(mercurySummary.USD),
+          status: 'OK',
+          surplus: parseFloat(mercurySummary.USD) - THRESHOLD_USD
+        },
+        revolut: {
+          balance: parseFloat(revolutSummary.USD),
+          status: 'OK',
+          surplus: parseFloat(revolutSummary.USD) - THRESHOLD_USD
+        }
+      };
+    }
+    
+  } catch (e) {
+    Logger.log('[ERROR] USD balance check failed: %s', e.message);
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Balance Check Error', 'Failed to check USD balances: ' + e.message, ui.ButtonSet.OK);
+    return {
+      status: 'ERROR',
+      error: e.message
+    };
+  }
+}
+
+function testUSDBalanceThreshold() {
+  var result = checkUSDBalanceThreshold();
+  Logger.log('[TEST] USD Balance check result: %s', JSON.stringify(result));
+}
+
+/* ============== GOOGLE SHEETS MENU SETUP ============== */
+
+/* ============== NEW MENU HANDLER FUNCTIONS ============== */
+function menuDryRunSpecificMonth() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    var response = ui.prompt('Dry Run Specific Month', 'Enter the month to test (format: YYYY-MM):\n\nExample: 2024-01', ui.ButtonSet.OK_CANCEL);
+    
+    if (response.getSelectedButton() === ui.Button.OK && response.getText()) {
+      var month = response.getText().trim();
+      ui.alert('Testing Payment System', `Running dry run test for ${month}...\n\nThis will show what would happen without making actual payments.`, ui.ButtonSet.OK);
+      
+      // Call the specific month dry run function
+      var result = dryRunPayUsersForSpecificMonth(month);
+      
+      var resultText = `🧪 DRY RUN RESULT for ${month}:\n\n`;
+      resultText += `Status: ${result.status}\n`;
+      resultText += `Users Found: ${result.usersToPay}\n`;
+      resultText += `Total USD: $${result.totalUsd}\n`;
+      resultText += `Total USDX: ${result.totalUsdx}\n`;
+      resultText += `Processing Fee: $${(result.totalUsd * 0.014).toFixed(2)}\n\n`;
+      
+      if (result.errors && result.errors.length > 0) {
+        resultText += `⚠️ Errors Found:\n`;
+        result.errors.forEach(error => resultText += `• ${error}\n`);
+      } else {
+        resultText += `✅ No errors found - ready for payment!`;
+      }
+      
+      ui.alert(`🧪 Dry Run Complete`, resultText, ui.ButtonSet.OK);
+    }
+  } catch (e) {
+    Logger.log('[ERROR] Menu dry run specific month failed: %s', e.message);
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('❌ Dry Run Error', `Failed to run dry run for specific month:\n\n${e.message}`, ui.ButtonSet.OK);
+  }
+}
+
+function menuPaySpecificMonth() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    var response = ui.prompt('Pay Specific Month', '⚠️ WARNING: This will make REAL PAYMENTS!\n\nEnter the month to pay (format: YYYY-MM):\n\nExample: 2024-01', ui.ButtonSet.OK_CANCEL);
+    
+    if (response.getSelectedButton() === ui.Button.OK && response.getText()) {
+      var month = response.getText().trim();
+      
+      // Confirm the real payment
+      var confirmResponse = ui.alert('Final Confirmation', `🚨 ARE YOU SURE?\n\nThis will make REAL payments for ${month}!\n\nTotal payout will be calculated and transferred.\n\nType YES to confirm:`);
+      ui.prompt('Final Confirmation', 'Type YES to confirm real payment:', ui.ButtonSet.OK_CANCEL);
+      
+      var confirmResponse = ui.prompt('Final Confirmation', 'Type YES to confirm real payment:', ui.ButtonSet.OK_CANCEL);
+      if (confirmResponse.getSelectedButton() === ui.Button.OK && confirmResponse.getText().trim().toUpperCase() === 'YES') {
+        
+        ui.alert('Processing Payments', `Executing real payments for ${month}...\n\nThis may take a few minutes.`, ui.ButtonSet.OK);
+        
+        // Call the specific month payment function
+        var result = payUsersForSpecificMonth(month);
+        
+        var resultText = `💰 PAYMENT RESULT for ${month}:\n\n`;
+        resultText += `Status: ${result.status}\n`;
+        resultText += `Users Paid: ${result.usersPaid}\n`;
+        resultText += `Total Transferred: $${result.totalTransferred}\n`;
+        resultText += `Processing Fee: $${result.processingFee}\n\n`;
+        
+        if (result.transactionIds && result.transactionIds.length > 0) {
+          resultText += `🔗 Transactions:\n`;
+          result.transactionIds.forEach(id => resultText += `• ${id}\n`);
+        }
+        
+        if (result.errors && result.errors.length > 0) {
+          resultText += `\n⚠️ Errors:\n`;
+          result.errors.forEach(error => resultText += `• ${error}\n`);
+        } else {
+          resultText += `✅ All payments successful!`;
+        }
+        
+        ui.alert(`💰 Payments Complete`, resultText, ui.ButtonSet.OK);
+      } else {
+        ui.alert('Payment Cancelled', 'Payment was cancelled. No payment was made.', ui.ButtonSet.OK);
+      }
+    }
+  } catch (e) {
+    Logger.log('[ERROR] Menu pay specific month failed: %s', e.message);
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('❌ Payment Error', `Failed to process payments for specific month:\n\n${e.message}`, ui.ButtonSet.OK);
+  }
+}
+
+function menuShowAvailableBanks() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Available Banks', 'Getting list of available banks...', ui.ButtonSet.OK);
+    
+    var summary = getBankAccountSummary();
+    
+    var bankListText = `🏦 AVAILABLE BANKS:\n\n`;
+    bankListText += `🏦 Mercury:\n`;
+    bankListText += `  USD: $${(summary.mercury?.USD || 0).toFixed(2)}\n`;
+    bankListText += `  EUR: €${(summary.mercury?.EUR || 0).toFixed(2)}\n\n`;
+    bankListText += `🏦 Revolut:\n`;
+    bankListText += `  USD: $${(summary.revolut?.USD || 0).toFixed(2)}\n`;
+    bankListText += `  EUR: €${(summary.revolut?.EUR || 0).toFixed(2)}\n\n`;
+    bankListText += `🏦 Wise:\n`;
+    bankListText += `  USD: $${(summary.wise?.USD || 0).toFixed(2)}\n`;
+    bankListText += `  EUR: €${(summary.wise?.EUR || 0).toFixed(2)}\n\n`;
+    bankListText += `🏦 Nexo:\n`;
+    bankListText += `  USD: $${(summary.nexo?.USD || 0).toFixed(2)}\n`;
+    bankListText += `  EUR: €${(summary.nexo?.EUR || 0).toFixed(2)}\n\n`;
+    bankListText += `💸 TOTAL CONSOLIDATED:\n`;
+    bankListText += `  USD: $${(summary.totalConsolidated?.USD || 0).toFixed(2)}\n`;
+    bankListText += `  EUR: €${(summary.totalConsolidated?.EUR || 0).toFixed(2)}\n`;
+    
+    ui.alert('🏦 Available Banks', bankListText, ui.ButtonSet.OK);
+    
+  } catch (e) {
+    Logger.log('[ERROR] Menu show available banks failed: %s', e.message);
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('❌ Bank List Error', `Failed to get bank information:\n\n${e.message}`, ui.ButtonSet.OK);
+  }
+}
+
+function menuTestConsolidation() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Testing Consolidation', 'Running internal consolidation test...\n\nThis will show USD consolidation within each bank.', ui.ButtonSet.OK);
+    
+    // Call the server-side internal consolidation test (dry run)
+    var result = httpProxyJson_('/intelligent-consolidation/test');
+    
+    var resultText = `🧪 INTERNAL CONSOLIDATION TEST:\n\n`;
+    
+    if (result.status === 'SUCCESS') {
+      resultText += `✅ DRY RUN COMPLETED!\n\n`;
+      
+      // Current balances
+      if (result.steps.currentBalances) {
+        resultText += `📊 CURRENT BANK BALANCES:\n`;
+        Object.keys(result.steps.currentBalances).forEach(bankName => {
+          var balance = result.steps.currentBalances[bankName].USD || 0;
+          var accountName = result.steps.currentBalances[bankName].accountName || '';
+          resultText += `• ${bankName.charAt(0).toUpperCase() + bankName.slice(1)}: $${balance.toFixed(2)}`;
+          if (accountName) {
+            resultText += ` (${accountName})`;
+          }
+          resultText += '\n';
+        });
+        resultText += `\n`;
+      }
+      
+      // Internal consolidation plan
+      if (result.steps.internalPlan && result.steps.internalPlan.consolidations.length > 0) {
+        resultText += `📁 INTERNAL CONSOLIDATION PLAN:\n`;
+        result.steps.internalPlan.consolidations.forEach(consolidation => {
+          resultText += `• ${consolidation.bank}: Move $${consolidation.amount.toFixed(2)} to Main Account\n`;
+        });
+        resultText += `\n`;
+      } else {
+        resultText += `📁 INTERNAL CONSOLIDATION: All USD already on Main accounts\n\n`;
+      }
+      
+      // Summary
+      resultText += `📋 SUMMARY:\n`;
+      resultText += `📁 Total USD to Consolidate: $${result.summary.totalUsdConsolidated.toFixed(2)}\n`;
+      resultText += `⚡ Consolidation Needed: ${result.summary.needsConsolidation ? 'Yes' : 'No'}`;
+      
+    } else {
+      resultText += `❌ TEST ERROR: ${result.error || result.detail || 'Unknown error'}\n\n`;
+    }
+    
+    ui.alert('🧪 Test Consolidation', resultText, ui.ButtonSet.OK);
+    
+  } catch (e) {
+    Logger.log('[ERROR] Menu test consolidation failed: %s', e.message);
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('❌ Consolidation Test Error', `Failed to test consolidation:\n\n${e.message}`, ui.ButtonSet.OK);
+  }
+}
+
+function reconcilePayoutWithSpreadsheet(receivedAmount, bankName) {
+  try {
+    Logger.log(`[PAYOUT_RECONCILE] Reconciling payout: $${receivedAmount} from ${bankName}`);
+    
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Payouts');
+    if (!sheet) {
+      Logger.log('[ERROR] Could not find Payouts sheet');
+      return { success: false, error: 'Payouts sheet not found' };
+    }
+    
+    // Get the data from A22 downwards (User, Platform, Account ID, Month, Day, Amount, Received)
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 22) {
+      Logger.log('[ERROR] No payout data found (sheet too short)');
+      return { success: false, error: 'No payout data found' };
+    }
+    
+    var payoutData = sheet.getRange(22, 1, lastRow - 21, 8).getValues();
+    Logger.log(`[PAYOUT_RECONCILE] Checking ${payoutData.length} payout entries...`);
+    
+    var bestMatch = { row: -1, score: 0, adjustment: 0 };
+    
+    // Look for unmatched payouts that could match this received amount
+    for (var i = 0; i < payoutData.length; i++) {
+      var row = payoutData[i];
+      var platform = String(row[1] || '').trim(); // Column B (Platform)
+      var baseAmount = Number(row[5] || 0); // Column G (Amount)
+      var received = String(row[7] || '').trim().toLowerCase(); // Column H (Received)
+      
+      // Skip if already marked as received
+      if (received === 'received' || received === 'yes' || received === 'true') {
+        continue;
+      }
+      
+      // Skip if no base amount
+      if (baseAmount <= 0) {
+        continue;
+      }
+      
+      // Calculate expected amount based on platform
+      var expectedCalc = calculateExpectedPayoutAmount_(platform, baseAmount);
+      
+      // Check if received amount matches expected range
+      if (receivedAmount >= expectedCalc.min && receivedAmount <= expectedCalc.max) {
+        var score = 1 - Math.abs(receivedAmount - expectedCalc.expected) / expectedCalc.expected;
+        Logger.log('[PAYOUT_RECONCILE] Row ' + (i + 22) + ': Platform=' + platform + ', Base=$' + baseAmount + ', Expected=' + expectedCalc.expected + ', Score=' + score.toFixed(3));
+        
+        if (score > bestMatch.score) {
+          bestMatch = { 
+            row: i + 22, 
+            score: score, 
+            adjustment: receivedAmount - baseAmount,
+            platform: platform,
+            baseAmount: baseAmount
+          };
+        }
+      }
+    }
+    
+    // If we found a good match (score > 0.8), mark it as received
+    if (bestMatch.score > 0.8) {
+      var reconcileRow = bestMatch.row;
+      var adjustmentAmount = bestMatch.adjustment;
+      
+      // Mark as received
+      sheet.getRange(reconcileRow, 8).setValue('Received'); // Column H
+      
+      // Add adjustment note if needed
+      if (Math.abs(adjustmentAmount) > 10) { // Only note significant adjustments
+        var note = receivedAmount + ' received (base: ' + bestMatch.baseAmount + ', adjustment: ' + (adjustmentAmount >= 0 ? '+' : '') + adjustmentAmount.toFixed(2) + ')';
+        Logger.log('[PAYOUT_RECONCILE] Marked row ' + reconcileRow + ' as received: ' + note);
+        
+        return { 
+          success: true, 
+          matchedRow: reconcileRow,
+          adjustment: adjustmentAmount,
+          message: 'Reconciled with row ' + reconcileRow + ': ' + bestMatch.platform + ' payout',
+          note: note
+        };
+      } else {
+        Logger.log('[PAYOUT_RECONCILE] Marked row ' + reconcileRow + ' as received: $' + receivedAmount);
+        return { 
+          success: true, 
+          matchedRow: reconcileRow,
+          adjustment: adjustmentAmount,
+          message: 'Reconciled with row ' + reconcileRow + ': ' + bestMatch.platform + ' payout'
+        };
+      }
+    } else {
+      Logger.log('[PAYOUT_RECONCILE] No suitable match found for $' + receivedAmount + ' (best score: ' + bestMatch.score.toFixed(3) + ')');
+      return { 
+        success: false, 
+        error: 'No suitable payout found for $' + receivedAmount,
+        suggestion: 'Check if payout was already marked as received or if amount is outside expected range'
+      };
+    }
+    
+  } catch (e) {
+    Logger.log('[ERROR] Payout reconciliation failed: %s', e.message);
+    return { success: false, error: e.message };
+  }
+}
+
+function calculateExpectedPayoutAmount_(platformName, baseAmount) {
+  if (platformName && platformName.toLowerCase().includes('topstep')) {
+    // Topstep: ~90% of base amount minus $20 transfer fee
+    var expected = Math.max(baseAmount * 0.9 - 20, baseAmount * 0.88);
+    return {
+      expected: expected,
+      min: expected * 0.95,  // 5% variance
+      max: expected * 1.05,
+      platform: 'Topstep'
+    };
+  } else if (platformName && platformName.toLowerCase().includes('mffu')) {
+    // MFFU: ~80% of base amount minus $20 transfer fee
+    var expected = Math.max(baseAmount * 0.8 - 20, baseAmount * 0.75);
+    return {
+      expected: expected,
+      min: expected * 0.95,  // 5% variance
+      max: expected * 1.05,
+      platform: 'MFFU'
+    };
+  } else {
+    // Default: assume close to base amount
+    var expected = baseAmount * 0.95; // Assume 5% less
+    return {
+      expected: expected,
+      min: expected * 0.95,
+      max: baseAmount,
+      platform: 'Unknown'
+    };
+  }
+}
+
+function menuExecuteConsolidation() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    
+    // Check for pending transfers first
+    var hasPendingTransfers = checkPendingTransfers_();
+    if (hasPendingTransfers) {
+      var pendingTransfers = getPendingTransfers_();
+      var pendingText = '⚠️ PENDING TRANSFERS DETECTED!\n\n';
+      pendingText += pendingTransfers.length + ' transfer(s) still in progress:\n\n';
+      
+      for (var i = 0; i < pendingTransfers.length; i++) {
+        var transfer = pendingTransfers[i];
+        var hoursSince = (new Date().getTime() - new Date(transfer.timestamp).getTime()) / (1000 * 60 * 60);
+        pendingText += '• ' + (transfer.bankName || 'Unknown') + ' ' + transfer.accountId + ': $' + transfer.amount + ' ' + transfer.currency + ' (' + hoursSince.toFixed(1) + ' hours ago)\n';
+      }
+      
+      pendingText += '\nTo prevent duplicate transfers, consolidation will be skipped.\n\nDo you want to force consolidation anyway?';
+      
+      var forceResponse = ui.alert('Pending Transfers Found', pendingText, ui.ButtonSet.YES_NO);
+      if (forceResponse !== ui.Button.YES) {
+        ui.alert('Consolidation Skipped', 'Consolidation was skipped to prevent duplicate transfers.\n\nCheck pending transfers in a few hours.', ui.ButtonSet.OK);
+        return;
+      }
+    }
+    
+    var confirmResponse = ui.alert('Execute Consolidation', '⚠️ WARNING: This will make REAL transfers!\n\nAll funds will be consolidated to the main account.\n\nAre you sure you want to proceed?', ui.ButtonSet.YES_NO);
+    
+    if (confirmResponse === ui.Button.YES) {
+      ui.alert('Executing Consolidation', 'Starting fund consolidation...\n\nThis may take a few minutes.', ui.ButtonSet.OK);
+      
+      // Call the intelligent consolidation system with force option
+      var result = intelligentConsolidationSystem_({ dryRun: false, force: hasPendingTransfers });
+      
+      var resultText = '💰 INTELLIGENT CONSOLIDATION RESULT:\n\n';
+      
+      if (result.status === 'SUCCESS') {
+        resultText += '✅ SUCCESS!\n\n';
+        
+        // Internal consolidation results
+        if (result.summary.totalUsdConsolidated > 0) {
+          resultText += '📁 INTERNAL CONSOLIDATION:\n';
+          resultText += '💰 Consolidated: $' + result.summary.totalUsdConsolidated.toFixed(2) + ' USD\n';
+          
+          if (result.steps.step2_internalConsolidation) {
+            result.steps.step2_internalConsolidation.consolidations.forEach(consolidation => {
+              resultText += '• ';
+              resultText += consolidation.bank + ': $' + consolidation.amount.toFixed(2) + '\n';
+            });
+          }
+          resultText += '\n';
+        }
+        
+        // Cross-bank top-up results  
+        if (result.summary.totalUsdTransferred > 0) {
+          resultText += '🔄 CROSS-BANK TOP-UP:\n';
+          resultText += '💰 Transferred: $' + result.summary.totalUsdTransferred.toFixed(2) + ' USD\n';
+          
+          if (result.steps.step3_crossBankTopup) {
+            result.steps.step3_crossBankTopup.topups.forEach(topup => {
+              resultText += '• ' + topup.fromBank + ' → ' + topup.toBank + ': $' + topup.amount.toFixed(2) + ' (' + topup.status + ')\n';
+            });
+          }
+          resultText += '\n';
+        }
+        
+        // Final balances
+        resultText += '🏦 FINAL MAIN ACCOUNT BALANCES:\n';
+        Object.keys(result.summary.mainAccountBalances).forEach(bankName => {
+          var balance = result.summary.mainAccountBalances[bankName];
+          var statusIcon = balance >= result.thresholdUsd ? '✅' : '🚨';
+          resultText += statusIcon + ' ' + bankName.charAt(0).toUpperCase() + bankName.slice(1) + ': $' + balance.toFixed(2) + '\n';
+        });
+        
+        resultText += '\n📋 THRESHOLD: $' + result.thresholdUsd + ' USD';
+        resultText += '\n💰 TRANSFER AMOUNT: $' + result.transferAmountUsd + ' USD';
+        
+      } else if (result.status === 'SKIPPED') {
+        resultText += '⏸️ SKIPPED - Pending Transfers Detected\n\n';
+        
+        if (result.pendingTransfers && result.pendingTransfers.length > 0) {
+          resultText += '📝 CURRENT PENDING TRANSFERS:\n';
+          for (var i = 0; i < result.pendingTransfers.length; i++) {
+            var transfer = result.pendingTransfers[i];
+            var transferDate = new Date(transfer.timestamp);
+            var hoursAgo = Math.floor((new Date().getTime() - transferDate.getTime()) / (1000 * 60 * 60));
+            var bankName = transfer.bankName || 'Unknown';
+            resultText += '• ' + bankName + ' $' + transfer.amount + ' ' + transfer.currency + ' (' + hoursAgo + 'h ago)\n';
+          }
+        }
+        
+      } else {
+        resultText += '❌ ERROR: ' + result.error + '\n\n';
+        
+        if (result.errors && result.errors.length > 0) {
+          resultText += 'ERRORS:\n';
+          result.errors.forEach(error => {
+            resultText += '• ' + error + '\n';
+          });
+        }
+      }
+      
+      ui.alert('💰 Consolidation Complete', resultText, ui.ButtonSet.OK);
+    } else {
+      ui.alert('Consolidation Cancelled', 'Consolidation was cancelled. No transfers were made.', ui.ButtonSet.OK);
+    }
+    
+  } catch (e) {
+    Logger.log('[ERROR] Menu execute consolidation failed: %s', e.message);
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('❌ Consolidation Error', `Failed to execute consolidation:\n\n${e.message}`, ui.ButtonSet.OK);
+  }
+}
+
+function menuCheckPendingTransfers() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    var transfers = getPendingTransfers_();
+    
+    if (transfers.length === 0) {
+      ui.alert('⏳ Pending Transfers', 'No pending transfers found.\n\nAll transfers are complete or none have been initiated recently.', ui.ButtonSet.OK);
+      return;
+    }
+    
+    var resultText = `⏳ PENDING TRANSFERS\n\n`;
+    resultText += `Found ${transfers.length} pending transfer(s):\n\n`;
+    
+    var totalPending = 0;
+    for (var i = 0; i < transfers.length; i++) {
+      var transfer = transfers[i];
+      var timeAgo = new Date().getTime() - new Date(transfer.timestamp).getTime();
+      var hoursSince = (timeAgo / (1000 * 60 * 60)).toFixed(1);
+      
+      resultText += `${i + 1}. ${transfer.bankName || 'Unknown'} - ${transfer.accountId}\n`;
+      resultText += `   Amount: $${transfer.amount} ${transfer.currency}\n`;
+      resultText += `   Started: ${hoursSince} hours ago\n`;
+      resultText += `   Transaction ID: ${transfer.transactionId}\n\n`;
+      
+      totalPending += transfer.amount;
+    }
+    
+    resultText += `💰 Total Pending: $${totalPending.toFixed(2)} USD\n\n`;
+    resultText += `⚠️ Consolidation will be skipped until these complete.\n`;
+    resultText += `💰 Expected completion: 1-3 business days`;
+    
+    ui.alert('⏳ Pending Transfers Status', resultText, ui.ButtonSet.OK);
+    
+  } catch (e) {
+    Logger.log('[ERROR] Menu check pending transfers failed: %s', e.message);
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('❌ Transfer Check Error', `Failed to check pending transfers:\n\n${e.message}`, ui.ButtonSet.OK);
+  }
+}
+
+function menuClearOldTransfers() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    var confirmResponse = ui.alert('Clear Old Transfers', '⚠️ This will clear ALL pending transfer records!\n\nUse this only if you know all transfers have completed.\n\nContinue?', ui.ButtonSet.YES_NO);
+    
+    if (confirmResponse === ui.Button.YES) {
+      setProp_('pending_transfers', '[]');
+      ui.alert('✅ Transfers Cleared', 'All pending transfer records have been cleared.\n\nFuture consolidation runs will proceed normally.', ui.ButtonSet.OK);
+    } else {
+      ui.alert('Operation Cancelled', 'Transfer clearing was cancelled.', ui.ButtonSet.OK);
+    }
+    
+  } catch (e) {
+    Logger.log('[ERROR] Menu clear old transfers failed: %s', e.message);
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('❌ Clear Error', `Failed to clear transfers:\n\n${e.message}`, ui.ButtonSet.OK);  
+  }
+}
+
+function menuCheckUSDBalances() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    
+    // Execute the balance check first, then show results (suppress automatic alert)
+    var result = checkUSDBalanceThreshold(true);
+    displayBalanceDialog(result);
+    
+  } catch (e) {
+    Logger.log('[ERROR] Menu USD balance check failed: %s', e.message);
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('❌ USD Balance Check Error', `Failed to check USD balances:\n\n${e.message}\n\n⏰ ${new Date().toLocaleString()}`, ui.ButtonSet.OK);
+  }
+}
+
+function menuCheckIndividualBanks() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Individual Banks', 'Checking individual bank balances...', ui.ButtonSet.OK);
+    
+    var result = checkIndividualBankBalances();
+    displayIndividualBanksDialog(result);
+    
+  } catch (e) {
+    Logger.log('[ERROR] Menu individual bank check failed: %s', e.message);
+    displayErrorDialog('Individual Bank Check Error', e.message);
+  }
+}
+
+function menuShowBalanceSummary() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Balance Summary', 'Generating balance summary...', ui.ButtonSet.OK);
+    
+    var result = generateBalanceSummaryForSheet();
+    displaySummaryDialog(result);
+    
+  } catch (e) {
+    Logger.log('[ERROR] Menu balance summary failed: %s', e.message);
+    displayErrorDialog('Balance Summary Error', e.message);
+  }
+}
+
+function menuUpdateAllBalances() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Balance Update', 'Updating all balances...', ui.ButtonSet.OK);
+    
+    updateAllBalances();
+    
+    // Show completion dialog instead of writing to cells
+    ui.alert('✅ Update Complete', `All bank balances have been updated successfully!\n\n⏰ Updated: ${new Date().toLocaleString()}`, ui.ButtonSet.OK);
+    
+  } catch (e) {
+    Logger.log('[ERROR] Menu balance update failed: %s', e.message);
+    displayErrorDialog('Balance Update Error', e.message);
+  }
+}
+
+function menuClearOutputs() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Info', 'Output clearing is not needed with dialog windows.\nAll results are shown in popup windows that close automatically.', ui.ButtonSet.OK);
+    
+  } catch (e) {
+    Logger.log('[ERROR] Menu clear outputs failed: %s', e.message);
+  }
+}
+
+/* ============== INDIVIDUAL BANK BALANCE CHECK ============== */
+function checkIndividualBankBalances() {
+  try {
+    Logger.log('[INDIVIDUAL_CHECK] Starting individual bank balance check...');
+    
+    var THRESHOLD_USD = 1000;
+    var TRANSFER_AMOUNT_USD = 2000;
+    
+    // Get Mercury MAIN account balance (not total across all accounts)
+    var mercurySummary = { USD: 0, EUR: 0 };
+    try {
+      mercurySummary = fetchMercuryMainBalance_();
+      Logger.log('[INDIVIDUAL_CHECK] Mercury Main Account: $%s (%s)', mercurySummary.USD, mercurySummary.note || 'balance retrieved');
+    } catch (e) {
+      Logger.log('[ERROR] Mercury Main balance failed: %s', e.message);
+    }
+    
+    // Get Revolut balance  
+    var revolutSummary = { USD: 0, EUR: 0 };
+    try {
+      revolutSummary = fetchRevolutSummary_();
+      Logger.log('[INDIVIDUAL_CHECK] Revolut: $%s', revolutSummary.USD);
+    } catch (e) {
+      Logger.log('[ERROR] Revolut summary failed: %s', e.message);
+    }
+    
+    var results = {
+      timestamp: new Date().toLocaleString(),
+      thresholdUSD: THRESHOLD_USD,
+      transferAmountUSD: TRANSFER_AMOUNT_USD,
+      banks: []
+    };
+    
+    // Check Mercury independently
+    var mercuryBalance = parseFloat(mercurySummary.USD);
+    var mercuryStatus = mercuryBalance < THRESHOLD_USD ? 'LOW' : 'OK';
+    var mercuryReport = {
+      name: 'Mercury',
+      balance: mercuryBalance,
+      status: mercuryStatus,
+      threshold: THRESHOLD_USD,
+      transferNeeded: mercuryStatus === 'LOW' ? TRANSFER_AMOUNT_USD : 0
+    };
+    
+    if (mercuryStatus === 'LOW') {
+      mercuryReport.shortfall = THRESHOLD_USD - mercuryBalance;
+      mercuryReport.message = `⚠️ Below threshold by $${mercuryReport.shortfall.toFixed(2)}`;
+    } else {
+      mercuryReport.surplus = mercuryBalance - THRESHOLD_USD;
+      mercuryReport.message = `✅ Above threshold (+$${mercuryReport.surplus.toFixed(2)})`;
+    }
+    results.banks.push(mercuryReport);
+    
+    // Check Revolut independently
+    var revolutBalance = parseFloat(revolutSummary.USD);
+    var revolutStatus = revolutBalance < THRESHOLD_USD ? 'LOW' : 'OK';
+    var revolutReport = {
+      name: 'Revolut',
+      balance: revolutBalance,
+      status: revolutStatus,
+      threshold: THRESHOLD_USD,
+      transferNeeded: revolutStatus === 'LOW' ? TRANSFER_AMOUNT_USD : 0
+    };
+    
+    if (revolutStatus === 'LOW') {
+      revolutReport.shortfall = THRESHOLD_USD - revolutBalance;
+      revolutReport.message = `🚨 Below threshold by $${revolutReport.shortfall.toFixed(2)} - Transfer $${TRANSFER_AMOUNT_USD}`;
+    } else {
+      revolutReport.surplus = revolutBalance - THRESHOLD_USD;
+      revolutReport.message = `✅ Above threshold (+$${revolutReport.surplus.toFixed(2)})`;
+    }
+    results.banks.push(revolutReport);
+    
+    results.overallStatus = results.banks.some(b => b.status === 'LOW') ? 'ALERT' : 'OK';
+    results.actionRequired = results.banks.filter(b => b.transferNeeded > 0);
+    
+    Logger.log('[INDIVIDUAL_CHECK] Overall status: %s', results.overallStatus);
+    return results;
+    
+  } catch (e) {
+    Logger.log('[ERROR] Individual bank balance check failed: %s', e.message);
+    return {
+      status: 'ERROR',
+      error: e.message,
+      timestamp: new Date().toLocaleString()
+    };
+  }
+}
+
+function generateBalanceSummaryForSheet() {
+  try {
+    Logger.log('[SUMMARY_CHECK] Generating balance summary for sheet...');
+    
+    var summaries = {};
+    
+    // Get Mercury summary
+    try {
+      summaries.mercury = fetchMercuryMainBalance_();
+      Logger.log('[SUMMARY_CHECK] Mercury Main balance: %s', JSON.stringify(summaries.mercury));
+    } catch (e) {
+      Logger.log('[WARNING] Mercury Main balance failed: %s', e.message);
+      summaries.mercury = { USD: 0, EUR: 0 };
+    }
+    
+    // Get Revolut summary  
+    try {
+      summaries.revolut = fetchRevolutSummary_();
+      Logger.log('[SUMMARY_CHECK] Revolut summary: %s', JSON.stringify(summaries.revolut));
+    } catch (e) {
+      Logger.log('[WARNING] Revolut summary failed: %s', e.message);
+      summaries.revolut = { USD: 0, EUR: 0 };
+    }
+    
+    var totalUSD = parseFloat(summaries.mercury.USD) + parseFloat(summaries.revolut.USD);
+    var totalEUR = parseFloat(summaries.mercury.EUR) + parseFloat(summaries.revolut.EUR);
+    
+    return {
+      timestamp: new Date().toLocaleString(),
+      totals: {
+        totalUSD: totalUSD,
+        totalEUR: totalEUR
+      },
+      banks: summaries,
+      health: {
+        mercuryOK: parseFloat(summaries.mercury.USD) >= 1000,
+        revolutOK: parseFloat(summaries.revolut.USD) >= 1000,
+        allHealthy: parseFloat(summaries.mercury.USD) >= 1000 && parseFloat(summaries.revolut.USD) >= 1000
+      }
+    };
+    
+  } catch (e) {
+    Logger.log('[ERROR] Balance summary generation failed: %s', e.message);
+    return {
+      status: 'ERROR',
+      error: e.message,
+      timestamp: new Date().toLocaleString()
+    };
+  }
+}
+
+/* ============== DIALOG OUTPUT FUNCTIONS ============== */
+function displayBalanceDialog(result) {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    var title = '💰 USD Balance Check';
+    var message = `📊 BANK BALANCE STATUS\n\n`;
+    
+    if (result.status === 'ALERT') {
+      message += `🚨 BANK BALANCE ALERT!\n\n`;
+      message += `🎯 Threshold per bank: $1,000\n\n`;
+      
+      // Add bank status with visual indicators
+      var mercuryStatus = result.mercury?.status === 'OK' ? '✅' : '🚨';
+      var revolutStatus = result.revolut?.status === 'OK' ? '✅' : '🚨';
+      
+      message += `🏦 Mercury Main: $${(result.mercury?.balance || 0).toFixed(2)} ${mercuryStatus}\n`;
+      message += `🏦 Revolut: $${(result.revolut?.balance || 0).toFixed(2)} ${revolutStatus}\n\n`;
+      
+      // Add low balance details
+      var lowBanks = [];
+      if ((result.mercury?.balance || 0) < 1000) {
+        var shortage = (1000 - (result.mercury?.balance || 0)).toFixed(2);
+        lowBanks.push(`MERCURY MAIN: Below threshold (-$${shortage})\n💸 Recommended Transfer: $2,000`);
+      }
+      if ((result.revolut?.balance || 0) < 1000) {
+        var shortage = (1000 - (result.revolut?.balance || 0)).toFixed(2);
+        lowBanks.push(`REVOLUT: Below threshold (-$${shortage})\n💸 Recommended Transfer: $2,000`);
+      }
+      
+      if (lowBanks.length > 0) {
+        message += lowBanks.join('\n\n') + '\n\n';
+      }
+      
+      message += `⚠️ Consider topping up low accounts!`;
+      
+    } else if (result.status === 'OK') {
+      message += `✅ HEALTHY STATUS\n\n`;
+      message += `🎯 Threshold per bank: $1,000\n\n`;
+      
+      message += `🏦 Mercury Main: $${(result.mercury?.balance || 0).toFixed(2)} ✅\n`;
+      message += `🏦 Revolut: $${(result.revolut?.balance || 0).toFixed(2)} ✅\n\n`;
+      
+      var totalSurplus = (result.mercury?.surplus || 0) + (result.revolut?.surplus || 0);
+      message += `📈 Total Surplus Above Threshold: $${totalSurplus.toFixed(2)}\n\n`;
+      message += `✅ All banks above $1,000 threshold`;
+    } else {
+      message += `❌ ERROR STATUS\n\n`;
+      message += `Error: ${result.error || 'Unknown error'}\n\n`;
+      message += `Please check logs for details`;
+    }
+    
+    message += `\n\n⏰ Checked: ${new Date().toLocaleString()}`;
+    
+    ui.alert(title, message, ui.ButtonSet.OK);
+    
+  } catch (e) {
+    Logger.log('[ERROR] Display balance dialog failed: %s', e.message);
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Error', 'Failed to display balance results: ' + e.message, ui.ButtonSet.OK);
+  }
+}
+
+function displayIndividualBanksDialog(result) {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    var title = '🏦 Individual Bank Check';
+    var message = `🏦 Individual Bank Balance Analysis\n\n`;
+    
+    if (result.overallStatus === 'ALERT') {
+      message += `🚨 OVERALL STATUS: ALERT\n`;
+    } else {
+      message += `✅ OVERALL STATUS: HEALTHY\n`;
+    }
+    
+    message += `🎯 Threshold: $${result.thresholdUSD}\n`;
+    message += `💸 Transfer Amount: $${result.transferAmountUSD}\n\n`;
+    
+    for (var i = 0; i < result.banks.length; i++) {
+      var bank = result.banks[i];
+      message += `🏦 ${bank.name}\n`;
+      message += `  Balance: $${bank.balance.toFixed(2)}\n`;
+      message += `  Status: ${bank.status === 'OK' ? '✅ OK' : '🚨 LOW'}\n`;
+      
+      if (bank.status === 'LOW' && bank.shortfall) {
+        message += `  Shortfall: $${bank.shortfall.toFixed(2)}\n`;
+        message += `  Transfer Needed: $${bank.transferNeeded}\n`;
+      } else if (bank.surplus) {
+        message += `  Surplus: +$${bank.surplus.toFixed(2)}\n`;
+      }
+      
+      message += `  Message: ${bank.message}\n\n`;
+    }
+    
+    if (result.actionRequired && result.actionRequired.length > 0) {
+      message += `🎯 ACTIONS REQUIRED:\n`;
+      for (var j = 0; j < result.actionRequired.length; j++) {
+        var action = result.actionRequired[j];
+        message += `• Transfer $${action.transferNeeded} to ${action.name}\n`;
+      }
+      message += `\n`;
+    }
+    
+    message += `⏰ Checked: ${new Date().toLocaleString()}`;
+    
+    ui.alert(title, message, ui.ButtonSet.OK);
+    
+  } catch (e) {
+    Logger.log('[ERROR] Display individual banks dialog failed: %s', e.message);
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Error', 'Failed to display bank results: ' + e.message, ui.ButtonSet.OK);
+  }
+}
+
+function displaySummaryDialog(result) {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    var title = '📊 Balance Summary';
+    var message = `📊 Complete Balance Summary\n\n`;
+    
+    message += `💵 TOTAL USD BALANCE: $${(result.totals?.totalUSD || 0).toFixed(2)}\n`;
+    message += `💶 TOTAL EUR BALANCE: €${(result.totals?.totalEUR || 0).toFixed(2)}\n\n`;
+    
+    message += `🏦 BANK BREAKDOWN:\n`;
+    message += `• Mercury USD: $${(result.banks?.mercury?.USD || 0).toFixed(2)}\n`;
+    message += `• Mercury EUR: €${(result.banks?.mercury?.EUR || 0).toFixed(2)}\n`;
+    message += `• Revolut USD: $${(result.banks?.revolut?.USD || 0).toFixed(2)}\n`;
+    message += `• Revolut EUR: €${(result.banks?.revolut?.EUR || 0).toFixed(2)}\n\n`;
+    
+    message += `🛡️ HEALTH STATUS:\n`;
+    message += `• Mercury Healthy: ${result.health?.mercuryOK ? '✅ Yes' : '❌ No'}\n`;
+    message += `• Revolut Healthy: ${result.health?.revolutOK ? '✅ Yes' : '❌ No'}\n`;
+    message += `• All Banks Healthy: ${result.health?.allHealthy ? '✅ Yes' : '❌ No'}\n\n`;
+    
+    message += `⏰ Generated: ${new Date().toLocaleString()}`;
+    
+    ui.alert(title, message, ui.ButtonSet.OK);
+    
+  } catch (e) {
+    Logger.log('[ERROR] Display summary dialog failed: %s', e.message);
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Error', 'Failed to display summary results: ' + e.message, ui.ButtonSet.OK);
+  }
+}
+
+/* ============== CELL OUTPUT FUNCTIONS (for automatic triggers) ============== */
+function displaySummaryResult(title, result) {
+  try {
+    var sh = sheet_(SHEET_NAME);
+    if (!sh) {
+      Logger.log('[ERROR] Sheet not found for display');
+      return;
+    }
+    
+    var output = [];
+    output.push([`📊 ${title}`, result.timestamp || new Date().toLocaleString()]);
+    output.push(['', '']);
+    
+    output.push(['💵 TOTAL USD BALANCE', '$' + (result.totals?.totalUSD || 0).toFixed(2)]);
+    output.push(['💶 TOTAL EUR BALANCE', '€' + (result.totals?.totalEUR || 0).toFixed(2)]);
+    output.push(['', '']);
+    
+    output.push(['🏦 BANK BREAKDOWN:', '']);
+    output.push(['Mercury USD', '$' + (result.banks?.mercury?.USD || 0).toFixed(2)]);
+    output.push(['Mercury EUR', '€' + (result.banks?.mercury?.EUR || 0).toFixed(2)]);
+    output.push(['Revolut USD', '$' + (result.banks?.revolut?.USD || 0).toFixed(2)]);
+    output.push(['Revolut EUR', '€' + (result.banks?.revolut?.EUR || 0).toFixed(2)]);
+    output.push(['', '']);
+    
+    output.push(['🛡️ HEALTH STATUS:', '']);
+    output.push(['Mercury Healthy', result.health?.mercuryOK ? '✅ Yes' : '❌ No']);
+    output.push(['Revolut Healthy', result.health?.revolutOK ? '✅ Yes' : '❌ No']);
+    output.push(['All Banks Healthy', result.health?.allHealthy ? '✅ Yes' : '❌ No']);
+    
+    sh.getRange('A10:B' + (10 + output.length - 1)).setValues(output);
+    
+  } catch (e) {
+    Logger.log('[ERROR] Display summary result failed: %s', e.message);
+  }
+}
+
+/* ============== ERROR DIALOG FUNCTION ============== */
+function displayErrorDialog(title, errorMessage) {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('❌ ' + title, 'An error occurred:\n\n' + errorMessage + '\n\nPlease try again or check the logs for more details.\n\n⏰ ' + new Date().toLocaleString(), ui.ButtonSet.OK);
+  } catch (e) {
+    Logger.log('[ERROR] Display error dialog failed: %s', e.message);
+  }
+}
+
+function displayError(title, errorMessage) {
+  try {
+    var sh = sheet_(SHEET_NAME);
+    if (!sh) {
+      Logger.log('[ERROR] Sheet not found for display');
+      return;
+    }
+    
+    var output = [];
+    output.push(['❌ ' + title, new Date().toLocaleString()]);
+    output.push(['Error Message', errorMessage]);
+    output.push(['', '']);
+    output.push(['Please try again or check logs', '']);
+    
+    sh.getRange('A10:B14').setValues(output);
+    
+  } catch (e) {
+    Logger.log('[ERROR] Display error failed: %s', e.message);
+  }
+}
+
+// End of file - All functions properly closed

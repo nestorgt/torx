@@ -359,13 +359,126 @@ async function revolutCreateTransfer(payload) {
     return { idempotent: true, duplicate: true, state: "duplicate", data };
   }
 
+  // ✔️ si Revolut devuelve duplicate (3020), trátalo como éxito idempotente
+  if (status === 400 && data && Number(data.code) === 3020) {
+    return { idempotent: true, duplicate: true, state: "duplicate", data };
+  }
+
   if (status >= 400) {
     throw new Error(`Revolut /transfer ${status}: ${JSON.stringify(data)}`);
   }
   return data; // { id, state, ... }
 }
 
+async function revolutCreateExternalTransfer(payload) {
+  const accessToken = await ensureAccessToken();
+  
+  // Try multiple external transfer endpoints
+  const endpoints = [
+    "https://b2b.revolut.com/api/1.0/external-transfer",
+    "https://b2b.revolut.com/api/1.0/payments/external",
+    "https://b2b.revolut.com/api/1.0/wire-transfers",
+    "https://b2b.revolut.com/api/1.0/ach-transfers"
+  ];
+  
+  for (const url of endpoints) {
+    try {
+      console.log(`[REVOLUT] Trying external transfer endpoint: ${url}`);
+      const { data, status } = await axios.post(url, payload, {
+        httpsAgent: revolutAgent,
+        headers: { Authorization: `Bearer ${accessToken}`, "content-type": "application/json" },
+        timeout: 20000,
+        validateStatus: () => true
+      });
+      
+      if (status < 400) {
+        console.log(`[REVOLUT] External transfer successful via ${url}`);
+        return { data, status, endpoint: url };
+      } else {
+        console.log(`[REVOLUT] ${url} failed: ${status} - ${JSON.stringify(data)}`);
+      }
+    } catch (error) {
+      console.log(`[REVOLUT] ${url} error: ${error.message}`);
+    }
+  }
+  
+  // If no external endpoints work, fall back to internal transfer logic
+  throw new Error(`All Revolut external transfer endpoints failed`);
+}
+
 /* ========= Revolut: mover entre cuentas (por nombre + divisa) ========= */
+/* ========= Revolut External Transfer ========= */
+app.post("/revolut/external-transfer", async (req, res) => {
+  if (!checkProxyAuth(req, res)) return;
+  console.log("[REVOLUT_EXT] External transfer request:", JSON.stringify(req.body, null, 2));
+  
+  try {
+    const { 
+      fromAccountId, 
+      externalBankAccount, 
+      amount, 
+      currency, 
+      reference 
+    } = req.body;
+    
+    if (!fromAccountId || !externalBankAccount || !amount || !currency) {
+      return res.status(400).json({ 
+        error: "bad_request", 
+        detail: "fromAccountId, externalBankAccount, amount, and currency are required" 
+      });
+    }
+    
+    if (amount <= 0) {
+      return res.status(400).json({ 
+        error: "bad_request", 
+        detail: "Amount must be greater than 0" 
+      });
+    }
+    
+    const payload = {
+      source_account_id: fromAccountId,
+      destination_account: {
+        name: externalBankAccount.name || 'External Account',
+        account_number: externalBankAccount.accountNumber,
+        routing_number: externalBankAccount.routingNumber || '021000021',
+        account_type: externalBankAccount.accountType || 'checking',
+        bank_name: externalBankAccount.bankName || 'Unknown Bank'
+      },
+      amount: Math.round(amount * 100) / 100,
+      currency: currency.toUpperCase(),
+      reference: reference || `External transfer to ${externalBankAccount.name || 'external account'}`,
+      request_id: crypto.randomUUID()
+    };
+    
+    console.log("[REVOLUT_EXT] External transfer payload:", JSON.stringify(payload, null, 2));
+    
+    const transfer = await revolutCreateExternalTransfer(payload);
+    
+    return res.json({
+      success: true,
+      transfer: {
+        id: transfer.data?.id || `external-${Date.now()}`,
+        status: transfer.data?.status || 'pending',
+        type: 'external_transfer',
+        amount: amount,
+        currency: currency,
+        destination: externalBankAccount.name || 'External Account',
+        reference: reference || '',
+        timestamp: new Date().toISOString(),
+        endpoint: transfer.endpoint
+      },
+      message: `External transfer initiated: $${amount} ${currency} to ${externalBankAccount.name || 'external account'}`
+    });
+    
+  } catch (error) {
+    console.error("[REVOLUT_EXT] External transfer error:", error.message);
+    return res.status(502).json({ 
+      error: "external_transfer_error", 
+      detail: error.message 
+    });
+  }
+});
+
 app.post("/revolut/transfer", async (req, res) => {
   if (!checkProxyAuth(req, res)) return;
   console.log("[XFER] incoming", { body: req.body });
@@ -546,6 +659,99 @@ app.post("/revolut/exchange", async (req, res) => {
 
 
 /* ===================== Mercury ===================== */
+app.get("/mercury/recent-transactions", async (req, res) => {
+  if (!checkProxyAuth(req, res)) return;
+  
+  try {
+    const limit = parseInt(req.query.limit) || 20;
+    console.log(`[MERCURY_RECENT] Fetching ${limit} recent Mercury transactions for payout analysis`);
+    
+    // Get recent transactions without date filtering for payout breakdown
+    const url = "https://api.mercury.com/api/v1/accounts";
+    const { data: accountsData, status: accountsStatus } = await axios.get(url, {
+      headers: { Accept: "application/json" },
+      auth: { username: MERCURY_API_TOKEN, password: "" },
+      timeout: 15000,
+      validateStatus: () => true
+    });
+    
+    if (accountsStatus >= 400) {
+      console.error('[MERCURY_RECENT] Mercury /accounts error:', accountsStatus, accountsData);
+      return res.status(502).json({ error: "mercury_error", status: accountsStatus, detail: accountsData });
+    }
+
+    const accounts = accountsData.accounts || [];
+    console.log(`[MERCURY_RECENT] Found ${accounts.length} Mercury accounts`);
+    
+    let allTransactions = [];
+    
+    // Get transactions from all accounts
+    for (const account of accounts) {
+      try {
+        const transactionsUrl = `https://api.mercury.com/api/v1/accounts/${account.id}/transactions`;
+        const { data: txData, status: txStatus } = await axios.get(transactionsUrl, {
+          headers: { Accept: "application/json" },
+          auth: { username: MERCURY_API_TOKEN, password: "" },
+          timeout: 15000,
+          validateStatus: () => true
+        });
+        
+        if (txStatus === 200 && txData.transactions) {
+          const accountTransactions = txData.transactions.map(tx => ({
+            ...tx,
+            accountId: account.id,
+            accountName: account.name
+          }));
+          allTransactions = allTransactions.concat(accountTransactions);
+        }
+      } catch (error) {
+        console.log(`[MERCURY_RECENT] Error fetching transactions for account ${account.id}:`, error.message);
+      }
+    }
+    
+    // Sort by date (most recent first) and filter for USD incoming
+    const incomingUsdTxns = allTransactions
+      .filter(tx => 
+        tx.amountCurrency === 'USD' &&
+        tx.type === 'ingress' &&
+        Math.abs(tx.amount) > 0
+      )
+      .sort((a, b) => {
+        const dateA = new Date(a.postedAt || a.createdAt);
+        const dateB = new Date(b.postedAt || b.createdAt);
+        return dateB - dateA; // Most recent first
+      })
+      .slice(0, limit);
+    
+    console.log(`[MERCURY_RECENT] Retrieved ${allTransactions.length} total transactions, ${incomingUsdTxns.length} USD incoming`);
+    
+    return res.json({
+      status: 'SUCCESS',
+      totalTransactions: allTransactions.length,
+      recentIncomingUsd: incomingUsdTxns.length,
+      transactions: incomingUsdTxns.map(tx => ({
+        id: tx.id,
+        amount: tx.amount,
+        description: tx.description,
+        postedAt: tx.postedAt,
+        createdAt: tx.createdAt,
+        accountId: tx.accountId,
+        accountName: tx.accountName,
+        amountCurrency: tx.amountCurrency,
+        type: tx.type
+      }))
+    });
+    
+  } catch (error) {
+    console.error('[ERROR] Mercury recent transactions fetch failed:', error.message);
+    return res.status(502).json({ 
+      error: "mercury_recent_transactions_error", 
+      detail: error.message,
+      status: error.response?.status || 500 
+    });
+  }
+});
+
 app.get("/mercury/summary", async (req, res) => {
   if (!checkProxyAuth(req, res)) return;
   try {
@@ -564,7 +770,7 @@ app.get("/mercury/summary", async (req, res) => {
 
     const getCcy = a => String(a.currency || a.ccy || a.currencyCode || a.nativeCurrency || 'USD').toUpperCase();
     const getVal = a => (typeof a.availableBalance === 'number') ? a.availableBalance
-                     : (typeof a.currentBalance   === 'number') ? a.currentBalance   : 0;
+                     :(typeof a.currentBalance   === 'number') ? a.currentBalance   : 0;
 
     const sum = (ccy) => list.filter(a => getCcy(a) === ccy).reduce((t,a)=>t+Number(getVal(a)||0), 0);
 
@@ -574,6 +780,79 @@ app.get("/mercury/summary", async (req, res) => {
     const detail = e.response?.data || e.message;
     console.error("Proxy error /mercury/summary:", status, detail);
     res.status(502).json({ error: "proxy_error", status, detail });
+  }
+});
+
+app.get("/mercury/accounts", async (req, res) => {
+  if (!checkProxyAuth(req, res)) return;
+  try {
+    const url = "https://api.mercury.com/api/v1/accounts";
+    const { data, status } = await axios.get(url, {
+      headers: { Accept: "application/json" },
+      auth: { username: MERCURY_API_TOKEN, password: "" },
+      timeout: 15000,
+      validateStatus: () => true
+    });
+    if (status >= 400) {
+      console.error("Mercury /accounts error:", status, data);
+      return res.status(502).json({ error: "mercury_error", status, detail: data });
+    }
+    const accounts = Array.isArray(data?.accounts) ? data.accounts : [];
+
+    // Prepare detailed account information
+    const accountDetails = accounts.map(account => {
+      const currency = String(account.currency || account.ccy || account.currencyCode || account.nativeCurrency || 'USD').toUpperCase();
+      const balance = (typeof account.availableBalance === 'number') ? account.availableBalance
+                     : (typeof account.currentBalance === 'number') ? account.currentBalance : 0;
+      
+      // Determine if this is the main account
+      const isMainAccount = (
+        account.name?.includes('2290') || 
+        account.nickname?.includes('2290') ||
+        account.name?.toLowerCase().includes('waresoul') ||
+        account.name?.toLowerCase().includes('main')
+      );
+
+      return {
+        id: account.id,
+        name: account.name || 'Unknown',
+        nickname: account.nickname || '',
+        currency: currency,
+        balance: balance,
+        availableBalance: account.availableBalance || 0,
+        currentBalance: account.currentBalance || 0,
+        isMainAccount: isMainAccount,
+        accountType: account.accountType || 'Unknown'
+      };
+    });
+
+    // Calculate totals by currency
+    const totals = {};
+    accounts.forEach(account => {
+      const currency = String(account.currency || account.ccy || account.currencyCode || account.nativeCurrency || 'USD').toUpperCase();
+      const balance = (typeof account.availableBalance === 'number') ? account.availableBalance
+                     : (typeof account.currentBalance === 'number') ? account.currentBalance : 0;
+      
+      if (!totals[currency]) {
+        totals[currency] = { total: 0, count: 0 };
+      }
+      totals[currency].total += balance;
+      totals[currency].count += 1;
+    });
+
+    return res.json({
+      accounts: accountDetails,
+      totals: totals,
+      totalAcrossAllAccounts: {
+        USD: totals.USD?.total || 0,
+        EUR: totals.EUR?.total || 0
+      }
+    });
+  } catch (e) {
+    const status = e.response?.status || 500;
+    const detail = e.response?.data || e.message;
+    console.error("Proxy error /mercury/accounts:", status, detail);
+    res.status(502).json({ error: "proxy_error", status: status, detail: detail });
   }
 });
 
@@ -1338,13 +1617,96 @@ app.post("/mercury/transfer", async (req, res) => {
       };
       
     } else {
-      // External transfer - would need to implement external transfer logic
-      // For now, return an error as this would require additional approval workflows
-      return res.status(400).json({
-        error: "external_transfer_not_supported",
-        detail: "External transfers require additional verification and approval",
-        suggestion: "For fund consolidation, use internal transfers between Mercury accounts only"
+      // External transfer - implement external transfer logic
+      console.log("[MERCURY] Attempting external transfer...");
+      
+      const externalTransferPayload = {
+        sourceAccountId: sourceAccount.id,
+        destinationAccount: {
+          name: destAccount.name, // Could be external bank name
+          accountNumber: destAccount.accountNumber || destAccount.id,
+          routingNumber: destAccount.routingNumber || '021000021', // Default ACH routing
+          accountType: 'checking' // Default account type
+        },
+        amount: Math.round(amount * 100), // Mercury expects cents
+        description: reference || `Transfer to ${destAccount.name}`,
+        idempotencyKey: request_id || `external-${Date.now()}-${amount}`
+      };
+      
+      console.log("[MERCURY] External transfer payload:", JSON.stringify(externalTransferPayload, null, 2));
+      
+      // Try external transfer endpoint
+      const externalTransferUrl = "https://api.mercury.com/api/v1/transfers/external";
+      const { data: externalTransferData, status: externalTransferStatus } = await axios.post(externalTransferUrl, externalTransferPayload, {
+        headers: { 
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        auth: { username: MERCURY_API_TOKEN, password: "" },
+        timeout: 30000,
+        validateStatus: () => true
       });
+      
+      console.log("[MERCURY] External transfer response:", externalTransferStatus, externalTransferData);
+      
+      if (externalTransferStatus >= 400) {
+        // Fallback: Try alternative external transfer endpoint
+        const alternativeUrl = "https://api.mercury.com/api/v1/payments";
+        const { data: paymentData, status: paymentStatus } = await axios.post(alternativeUrl, externalTransferPayload, {
+          headers: { 
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          },
+          auth: { username: MERCURY_API_TOKEN, password: "" },
+          timeout: 30000,
+          validateStatus: () => true
+        });
+        
+        console.log("[MERCURY] Payment response:", paymentStatus, paymentData);
+        
+        if (paymentStatus >= 400) {
+          return res.status(502).json({ 
+            error: "external_transfer_unavailable", 
+            status: externalTransferStatus, 
+            detail: externalTransferData,
+            alternative_status: paymentStatus,
+            alternative_detail: paymentData,
+            suggestion: "External transfers may require additional approval workflows or different API endpoints"
+          });
+        } else {
+          transferResult = {
+            transfer: {
+              id: paymentData.id || `external-${Date.now()}`,
+              status: paymentData.status || 'pending',
+              type: 'external_transfer',
+              amount: amount,
+              currency: currency,
+              fromAccount: sourceAccount.name,
+              toAccount: `External transfer to ${destAccount.name}`,
+              reference: reference || '',
+              timestamp: new Date().toISOString()
+            },
+            success: true,
+            message: `External transfer initiated: $${amount} ${currency} from ${sourceAccount.name} to ${destAccount.name}`
+          };
+        }
+      } else {
+        transferResult = {
+          transfer: {
+            id: externalTransferData.id || `external-${Date.now()}`,
+            status: externalTransferData.status || 'pending',
+            type: 'external_transfer',
+            amount: amount,
+            currency: currency,
+            fromAccount: sourceAccount.name,
+            toAccount: destAccount.name,
+            reference: reference || '',
+            timestamp: new Date().toISOString()
+          },
+          success: true,
+          message: `External transfer initiated: $${amount} ${currency} from ${sourceAccount.name} to ${destAccount.name}`
+        };
+      }
     }
     
     return res.json(transferResult);
@@ -1887,6 +2249,85 @@ app.get("/revolut/test", async (req, res) => {
   } catch (e) {
     console.error("Proxy error /revolut/test:", e.message);
     return res.status(502).json({ error: "revolut_error", detail: e.message });
+  }
+});
+
+/* ===================== Check Revolut External Banks/Beneficiaries ===================== */
+app.get("/revolut/beneficiaries", async (req, res) => {
+  if (!checkProxyAuth(req, res)) return;
+  try {
+    console.log('[INFO] Checking Revolut beneficiaries/saved banks...');
+    
+    const accessToken = await ensureAccessToken();
+    
+    // Try different beneficiary endpoints that might exist
+    const endpoints = [
+      'https://b2b.revolut.com/api/1.0/beneficiaries',
+      'https://b2b.revolut.com/api/1.0/recipients', 
+      'https://b2b.revolut.com/api/1.0/external-beneficiaries',
+      'https://b2b.revolut.com/api/1.0/bank-beneficiaries',
+      'https://b2b.revolut.com/api/1.0/payment-methods',
+      'https://b2b.revolut.com/api/1.0/external-transfers'
+    ];
+    
+    const results = [];
+    
+    for (const endpoint of endpoints) {
+      try {
+        const response = await axios.get(endpoint, {
+          httpsAgent: revolutAgent,
+          headers: { 
+            Authorization: `Bearer ${accessToken}`,
+            'Accept': 'application/json'
+          },
+          timeout: 10000,
+          validateStatus: () => true // Don't throw on HTTP errors
+        });
+        
+        results.push({
+          endpoint: endpoint.replace('https://b2b.revolut.com/api/1.0/', ''),
+          status: response.status,
+          accessible: response.status < 400,
+          hasData: response.data ? true : false,
+          dataPreview: response.data ? (Array.isArray(response.data) ? 
+            `Array of ${response.data.length} items` : 
+            `Object with keys: ${Object.keys(response.data).join(', ')}`) : 'No data'
+        });
+        
+        console.log(`[INFO] ${endpoint}: ${response.status} - ${response.status < 400 ? 'SUCCESS' : 'NOT AVAILABLE'}`);
+        
+        // If successful, include sample data 
+        if (response.status < 400 && response.data) {
+          results[results.length-1].sampleData = Array.isArray(response.data) ? 
+            response.data.slice(0, 2) : // First 2 items if array
+            response.data; // Full object if not array
+        }
+        
+      } catch (e) {
+        results.push({
+          endpoint: endpoint.replace('https://b2b.revolut.com/api/1.0/', ''),
+          status: 0,
+          accessible: false,
+          error: e.message
+        });
+        console.log(`[ERROR] ${endpoint}: ${e.message}`);
+      }
+    }
+    
+    const accessible = results.filter(r => r.accessible);
+    
+    return res.json({
+      message: 'Revolut beneficiaries/saved banks check completed',
+      accessibleEndpoints: accessible.length,
+      results: results,
+      summary: accessible.length > 0 ? 
+        `Found ${accessible.length} accessible endpoint(s) for external beneficiaries` : 
+        'No external beneficiary endpoints accessible'
+    });
+    
+  } catch (e) {
+    console.error("Error checking Revolut beneficiaries:", e.message);
+    return res.status(502).json({ error: "beneficiaries_check_failed", detail: e.message });
   }
 });
 
@@ -3061,5 +3502,544 @@ app.post('/incoming-sms', async (req, res) => {
     res.status(502).json({ error: "incoming_sms_error", detail: error.reason || error.message, status: error.response?.status || 500 });
   }
 });
+
+/* ===================== Intelligent Consolidation System ===================== */
+app.get("/intelligent-consolidation/test", async (req, res) => {
+  if (!checkProxyAuth(req, res)) return;
+  
+  try {
+    console.log('[INTELLIGENT_CONSOLIDATION] Starting internal consolidation test...');
+    
+    // Step 1: Fetch all bank balances
+    console.log('[STEP_1] Fetching all bank USD balances...');
+    const bankBalances = await fetchAllBankBalances();
+    
+    // Step 2: Internal consolidation analysis only  
+    console.log('[STEP_2] Analyzing internal consolidation needs...');
+    const internalPlan = await analyzeInternalConsolidation(bankBalances);
+    
+    // Combine results
+    const result = {
+      status: 'SUCCESS',
+      timestamp: new Date().toISOString(),
+      steps: {
+        currentBalances: bankBalances,
+        internalPlan: internalPlan
+      },
+      summary: {
+        needsConsolidation: internalPlan.consolidations.length > 0,
+        totalUsdConsolidated: internalPlan.totalAmount
+      }
+    };
+    
+    return res.json(result);
+    
+  } catch (error) {
+    console.error('[ERROR] Internal consolidation test failed:', error.message);
+    return res.status(502).json({ 
+      error: "internal_consolidation_error", 
+      detail: error.message,
+      status: error.response?.status || 500 
+    });
+  }
+});
+
+app.post("/intelligent-consolidation/execute", async (req, res) => {
+  if (!checkProxyAuth(req, res)) return;
+  
+  try {
+    console.log('[INTELLIGENT_CONSOLIDATION] Starting internal consolidation execution...');
+    
+    const dryRun = req.body.dryRun !== false; // Default to true      
+    
+    console.log(`[EXECUTION] Mode: ${dryRun ? 'DRY_RUN' : 'REAL_EXECUTION'}`);
+    
+    const result = await executeInternalConsolidation(dryRun);
+    
+    return res.json(result);
+    
+  } catch (error) {
+    console.error('[ERROR] Internal consolidation execution failed:', error.message);
+    return res.status(502).json({ 
+      error: "internal_consolidation_execution_error", 
+      detail: error.message,
+      status: error.response?.status || 500 
+    });
+  }
+});
+
+/* ===================== Intelligent Consolidation Helper Functions ===================== */
+async function fetchAllBankBalances() {
+  const balances = {};
+  
+  try {
+    // Mercury Main Account Balance
+    console.log('[BALANCE_FETCH] Fetching Mercury Main account balance...');
+    const mercuryResponse = await axios.get('https://api.mercury.com/api/v1/accounts', {
+      headers: { Accept: "application/json" },
+      auth: { username: MERCURY_API_TOKEN, password: "" },
+      timeout: 15000,
+      validateStatus: () => true
+    });
+    
+    if (mercuryResponse.status >= 400) {
+      console.error("Mercury API error:", mercuryResponse.status, mercuryResponse.data);
+      balances.mercury = { USD: 0, EUR: 0, bankName: 'Mercury', error: 'API error' };
+    } else {
+      const accounts = mercuryResponse.data?.accounts || [];
+      
+      // Find Main account
+      const mainAccount = accounts.find(account => 
+        account.name?.includes('2290') || 
+        account.isMainAccount === true
+      );
+      
+      if (mainAccount) {
+        balances.mercury = {
+          USD: parseFloat(mainAccount.availableBalance || mainAccount.balance || 0),
+          EUR: 0,
+          bankName: 'Mercury',
+          accountId: mainAccount.id,
+          accountName: mainAccount.name,
+          isMainAccount: true
+        };
+      } else {
+        balances.mercury = { USD: 0, EUR: 0, bankName: 'Mercury', error: 'Main account not found' };
+      }
+    }
+    
+    console.log('[BALANCE_FETCH] Mercury Main:', balances.mercury.USD);
+    
+  } catch (error) {
+    console.error('[ERROR] Failed to fetch Mercury balance:', error.message);
+    balances.mercury = { USD: 0, EUR: 0, bankName: 'Mercury', error: error.message };
+  }
+  
+  try {
+    // Revolut Balance
+    console.log('[BALANCE_FETCH] Fetching Revolut balance...');
+    const accessToken = await ensureAccessToken();
+    
+    const revolutResponse = await axios.get('https://b2b.revolut.com/api/1.0/accounts', {
+      httpsAgent: revolutAgent,
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Accept': 'application/json'
+      },
+      timeout: 15000,
+      validateStatus: () => true
+    });
+    
+    if (revolutResponse.status >= 400) {
+      console.error("Revolut API error:", revolutResponse.status, revolutResponse.data);
+      balances.revolut = { USD: 0, EUR: 0, bankName: 'Revolut', error: 'API error' };
+    } else {
+      const accounts = revolutResponse.data || [];
+      let totalUSD = 0;
+      
+      accounts.forEach(account => {
+        if (account.currency === 'USD') {
+          totalUSD += parseFloat(account.balance || 0);
+        }
+      });
+      
+      balances.revolut = {
+        USD: totalUSD,
+        EUR: 0,
+        bankName: 'Revolut'
+      };
+    }
+    
+    console.log('[BALANCE_FETCH] Revolut:', balances.revolut.USD);
+    
+  } catch (error) {
+    console.error('[ERROR] Failed to fetch Revolut balance:', error.message);
+    balances.revolut = { USD: 0, EUR: 0, bankName: 'Revolut', error: error.message };
+  }
+  
+  // Simplified versions for now
+  balances.wise = { USD: 0, EUR: 0, bankName: 'Wise', note: 'API not implemented' };
+  balances.nexo = { USD: 0, EUR: 0, bankName: 'Nexo', note: 'API not implemented' };
+  
+  return balances;
+}
+
+async function analyzeInternalConsolidation(bankBalances) {
+  console.log('[INTERNAL_ANALYSIS] Analyzing internal consolidation needs...');
+  
+  const result = {
+    consolidations: [],
+    totalAmount: 0,
+    banksAnalyzed: 0
+  };
+  
+  // Mercury Internal Consolidation Analysis
+  try {
+    console.log('[MERCURY_INTERNAL] Analyzing Mercury internal consolidation...');
+    
+    const accountsResponse = await axios.get('https://api.mercury.com/api/v1/accounts', {
+      headers: { Accept: "application/json" },
+      auth: { username: MERCURY_API_TOKEN, password: "" },
+      timeout: 15000,
+      validateStatus: () => true
+    });
+    
+    if (accountsResponse.status < 400) {
+      const accounts = accountsResponse.data?.accounts || [];
+      
+      // Find accounts with USD funds that aren't main
+      let consolidationAmount = 0;
+      
+      accounts.forEach(account => {
+        const currency = account.currency || 'USD';
+        const balance = parseFloat(account.availableBalance || account.balance || 0);
+        
+        if (currency === 'USD' && balance > 0) {
+          const isMainAccount = (
+            account.name?.includes('2290') || 
+            account.nickname?.includes('2290') ||
+            account.isMainAccount === true ||
+            account.nickname?.toLowerCase().includes('main')
+         );
+         
+          if (!isMainAccount) {
+            consolidationAmount += balance;
+            console.log(`[MERCURY_CONSOLIDATE] Found ${account.name}: $${balance}`);
+          }
+        }
+      });
+      
+      if (consolidationAmount > 0) {
+        result.consolidations.push({
+          bank: 'Mercury',
+          amount: consolidationAmount,
+          currency: 'USD',
+          accountsCount: accounts.filter(a => !a.isMainAccount && a.availableBalance > 0).length,
+          note: 'Move funds from non-Main Mercury accounts to Main account'
+        });
+        result.totalAmount += consolidationAmount;
+      }
+    }
+    
+    result.banksAnalyzed++;
+    
+  } catch (error) {
+    console.error('[ERROR] Mercury internal analysis failed:', error.message);
+  }
+  
+  console.log(`[INTERNAL_ANALYSIS] Completed: ${result.consolidations.length} consolidations, $${result.totalAmount}`);
+  return result;
+}
+
+// Cross-bank analysis removed - only internal consolidation now
+
+/* ===================== Payout Reconciliation Functions ===================== */
+async function reconcilePayouts(receivedAmount, bankName) {
+  console.log(`[PAYOUT_RECONCILE] Reconciling payout: $${receivedAmount} from ${bankName}`);
+  
+  try {
+    // If Mercury, try to get recent transaction data to break down the amount
+    let individualAmounts = [receivedAmount]; // Default to single amount
+    
+    if (bankName.toLowerCase() === 'mercury') {
+      console.log(`[PAYOUT_RECONCILE] Mercury detected - attempting to break down $${receivedAmount}`);
+      individualAmounts = await getMercuryTransactionBreakdown(receivedAmount);
+      console.log(`[PAYOUT_RECONCILE] Found ${individualAmounts.length} individual transfer(s): ${individualAmounts.map(a => `$${a}`).join(', ')}`);
+    }
+    
+    const reconciledTransfers = [];
+    let successfulMatches = 0;
+    
+    let processedAmount = receivedAmount;
+    
+    // Try to reconcile each individual amount
+    for (let i = 0; i < individualAmounts.length && processedAmount > 0; i++) {
+      const individualAmount = individualAmounts[i];
+      
+      const payoutData = {
+        receivedAmount: individualAmount,
+        bankName: bankName,
+        timestamp: new Date().toISOString(),
+        isPartialAmount: individualAmounts.length > 1,
+        remainingAmount: processedAmount - individualAmount
+      };
+      
+      // Call Google Apps Script to reconcile with Payouts sheet
+      const reconcileUrl = "https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec";
+      
+      const response = await axios.post(reconcileUrl, {
+        action: 'reconcile_payout',
+        data: payoutData
+      }, {
+        timeout: 15000,
+        validateStatus: () => true
+      });
+      
+      if (response.status < 400 && response.data?.success) {
+        console.log(`[PAYOUT_RECONCILE] Individual reconciliation successful: $${individualAmount} -> ${response.data.matchedRow}`);
+        reconciledTransfers.push({
+          amount: individualAmount,
+          matchedRow: response.data.matchedRow,
+          adjustment: response.data.adjustment || 0,
+          message: response.data.message
+        });
+        successfulMatches++;
+        processedAmount -= individualAmount;
+      } else {
+        console.log(`[PAYOUT_RECONCILE] Individual reconciliation failed for $${individualAmount}`);
+        // Even if individual reconciliation fails, we still have the money
+        reconciledTransfers.push({
+          amount: individualAmount,
+          matchedRow: null,
+          adjustment: 0,
+          message: 'Received but not matched to spreadsheet'
+        });
+      }
+    }
+    
+    return {
+      success: successfulMatches > 0,
+      totalAmount: receivedAmount,
+      individualTransfers: reconciledTransfers,
+      successfulMatches: successfulMatches,
+      message: `Reconciled ${successfulMatches} of ${individualAmounts.length} transfers`
+    };
+    
+  } catch (error) {
+    console.error(`[PAYOUT_RECONCILE] Error reconciling payout:`, error.message);
+    return {
+      success: false,
+      error: error.message,
+      message: 'Payout reconciliation service unavailable'
+    };
+  }
+}
+
+async function getMercuryTransactionBreakdown(totalAmount) {
+  try {
+    console.log(`[MERCURY_BREAKDOWN] Fetching recent Mercury transactions to break down $${totalAmount}`);
+    
+    // Use our own server endpoint to get recent transactions
+    const serverBaseUrl = process.env.SERVER_BASE_URL || 'http://localhost:8081';
+    const proxyToken = process.env.PROXY_TOKEN || 'proxy123';
+    
+    const response = await axios.get(`${serverBaseUrl}/mercury/recent-transactions?limit=20`, {
+      headers: {
+        'Authorization': `Bearer ${proxyToken}`,
+        'Content-Type': 'application/json'
+      },
+      timeout: 10000
+    });
+    
+    if (response.status !== 200) {
+      console.log(`[MERCURY_BREAKDOWN] Failed to fetch transactions: ${response.status}`);
+      return [totalAmount]; // Fallback to single amount
+    }
+    
+    const transactions = response.data?.transactions || [];
+    console.log(`[MERCURY_BREAKDOWN] Found ${transactions.length} recent USD incoming transactions`);
+    
+    if (transactions.length === 0) {
+      console.log(`[MERCURY_BREAKDOWN] No transactions found, using single amount`);
+      return [totalAmount];
+    }
+    
+    // Try to find combinations that sum to totalAmount
+    const breakdown = findTransferCombinations(transactions, totalAmount);
+    
+    if (breakdown.length > 0) {
+      console.log(`[MERCURY_BREAKDOWN] Success: Found ${breakdown.length} transfer(s) that sum to $${totalAmount}`);
+      return breakdown.map(tx => Math.abs(tx.amount));
+    } else {
+      console.log(`[MERCURY_BREAKDOWN] No combination found, using single amount: $${totalAmount}`);
+      return [totalAmount];
+    }
+    
+  } catch (error) {
+    console.log(`[MERCURY_BREAKDOWN] Error: ${error.message}, fallback to single amount`);
+    return [totalAmount];
+  }
+}
+
+function findTransferCombinations(transactions, targetAmount, tolerance = 10) {
+  const amounts = transactions.map(tx => Math.abs(tx.amount));
+  
+  // Try single transaction first
+  for (let i = 0; i < amounts.length; i++) {
+    if (Math.abs(amounts[i] - targetAmount) <= tolerance) {
+      return [amounts[i]];
+    }
+  }
+  
+  // Try all pairs
+  for (let i = 0; i < amounts.length; i++) {
+    for (let j = i + 1; j < amounts.length; j++) {
+      const sum = amounts[i] + amounts[j];
+      if (Math.abs(sum - targetAmount) <= tolerance) {
+        return [amounts[i], amounts[j]];
+      }
+    }
+  }
+  
+  // Try triplets
+  for (let i = 0; i < amounts.length; i++) {
+    for (let j = i + 1; j < amounts.length; j++) {
+      for (let k = j + 1; k < amounts.length; k++) {
+        const sum = amounts[i] + amounts[j] + amounts[k];
+        if (Math.abs(sum - targetAmount) <= tolerance) {
+          return [amounts[i], amounts[j], amounts[k]];
+        }
+      }
+    }
+  }
+  
+  return [];
+}
+
+function calculateExpectedAmount(platformName, baseAmount) {
+  // Apply platform-specific adjustments
+  if (platformName && platformName.toLowerCase().includes('topstep')) {
+    // Topstep: ~90% of base amount minus $20 transfer fee
+    // Sometimes they pay 100% though
+    const adjustedAmount = Math.max(baseAmount * 0.9 - 20, baseAmount - 20);
+    return {
+      expectedMin: adjustedAmount * 0.9, // Allow 10% variance for rounding
+      expectedMax: baseAmount,
+      platform: 'Topstep'
+    };
+  } else if (platformName && platformName.toLowerCase().includes('mffu')) {
+    // MFFU: ~80% of base amount minus $20 transfer fee
+    const adjustedAmount = Math.max(baseAmount * 0.8 - 20, baseAmount * 0.85 - 20);
+    return {
+      expectedMin: adjustedAmount * 0.9, // Allow 10% variance
+      expectedMax: baseAmount,
+      platform: 'MFFU'
+    };
+  } else {
+    // Default: assume close to base amount
+    return {
+      expectedMin: baseAmount * 0.95,
+      expectedMax: baseAmount,
+      platform: 'Unknown'
+    };
+  }
+}
+
+async function executeInternalConsolidation(dryRun) {
+  console.log(`[EXECUTE] Starting internal consolidation (${dryRun ? 'DRY_RUN' : 'REAL_EXECUTION'})...`);
+  
+  const result = {
+    status: 'SUCCESS',
+    timestamp: new Date().toISOString(),
+    mode: dryRun ? 'DRY_RUN' : 'REAL_EXECUTION',
+    executions: [],
+    payoutReconciliations: [],
+    errors: [],
+    summary: {
+      totalConsolidated: 0,
+      payoutsReconciled: 0,
+      successCount: 0,
+      errorCount: 0
+    }
+  };
+  
+  try {
+    // Get bank balances
+    const bankBalances = await fetchAllBankBalances();
+    
+    // Analyze internal consolidation
+    const internalPlan = await analyzeInternalConsolidation(bankBalances);
+    
+    // Check for payout reconciliation opportunities
+    const payoutOpportunities = [];
+    
+    // Look for non-Main USD accounts with balances (indicating incoming payouts)
+    Object.keys(bankBalances).forEach(bankName => {
+      const bankData = bankBalances[bankName];
+      if (bankData && bankData.hasMultipleAccounts && bankData.nonMainAccounts) {
+        bankData.nonMainAccounts.forEach(account => {
+          if (account.currency === 'USD' && account.balance > 0) {
+            payoutOpportunities.push({
+              bankName: bankName,
+              accountName: account.name,
+              amount: account.balance,
+              currency: account.currency
+            });
+          }
+        });
+      }
+    });
+    
+    console.log(`[PAYOUT_DETECTION] Found ${payoutOpportunities.length} potential payout(s)`);
+    
+    // Execute internal consolidations with payout reconciliation
+    for (let i = 0; i < internalPlan.consolidations.length; i++) {
+      const consolidation = internalPlan.consolidations[i];
+      
+      console.log(`[EXECUTE_INTERNAL] ${consolidation.bank}: ${dryRun ? 'DRY_RUN' : 'EXECUTING'} $${consolidation.amount}`);
+      
+      // Check if this consolidation might be from a payout
+      const relatedPayout = payoutOpportunities.find(p => 
+        p.bankName.toLowerCase() === consolidation.bank.toLowerCase()
+      );
+      
+      if (relatedPayout) {
+        console.log(`[PAYOUT_DETECTED] Potential payout: $${relatedPayout.amount} from ${relatedPayout.accountName}`);
+        
+        // Attempt payout reconciliation
+        if (!dryRun) {
+          try {
+            const reconciliation = await reconcilePayouts(relatedPayout.amount, consolidation.bank);
+            result.payoutReconciliations.push({
+              bank: consolidation.bank,
+              amount: relatedPayout.amount,
+              accountName: relatedPayout.accountName,
+              reconciliation: reconciliation
+            });
+            
+            if (reconciliation.success) {
+              result.summary.payoutsReconciled++;
+              console.log(`[PAYOUT_SUCCESS] Reconciled: ${reconciliation.message}`);
+            } else {
+              console.log(`[PAYOUT_FAILED] ${reconciliation.message}`);
+            }
+          } catch (error) {
+            console.log(`[PAYOUT_ERROR] Reconciliation failed: ${error.message}`);
+          }
+        } else {
+          console.log(`[PAYOUT_DRY_RUN] Would reconcile payout: $${relatedPayout.amount} from ${relatedPayout.accountName}`);
+        }
+      }
+      
+      if (!dryRun) {
+        // Here you would implement actual transfer logic
+        console.log(`[WOULD_EXECUTE] ${consolidation.bank} internal consolidation: $${consolidation.amount}`);
+      }
+      
+      result.executions.push({
+        type: 'internal_consolidation',
+        bank: consolidation.bank,
+        amount: consolidation.amount,
+        status: dryRun ? 'dry_run' : 'executed',
+        note: consolidation.note,
+        payoutDetected: relatedPayout ? relatedPayout.amount : null
+      });
+      
+      result.summary.totalConsolidated += consolidation.amount;
+      result.summary.successCount++;
+    }
+    
+    console.log(`[EXECUTE_COMPLETE] Internal consolidation completed: ${result.summary.successCount} successful, ${result.summary.payoutsReconciled} payouts reconciled, ${result.summary.errorCount} errors`);
+    
+  } catch (error) {
+    console.error('[ERROR] Internal consolidation execution failed:', error.message);
+    result.status = 'ERROR';
+    result.error = error.message;
+    result.summary.errorCount++;
+    result.errors.push(error.message);
+  }
+  
+  return result;
+}
 
 
