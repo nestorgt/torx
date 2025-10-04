@@ -107,6 +107,8 @@
 /* ============== Configuration ============== */
 var SHEET_NAME = 'Payouts';           // Bank balance sheet
 var USERS_SHEET = 'Users';            // User payments sheet
+var MIN_BALANCE_USD = 1000;           // Minimum balance for main banks
+var TOPUP_AMOUNT_USD = 3000;          // Amount to transfer for topups
 var TS_CELL = 'A1';                   // Timestamp cell for payouts
 
 var USERS_FIRST_MONTH_ROW = 30;       // First month row for user payments
@@ -1144,6 +1146,214 @@ function setCellWithNote_(sheetName, a1, value, note) {
   }
 }
 
+/* ============== Bank Minimum Balance Functions ============== */
+function checkBankMinimumBalance_(bankName) {
+  try {
+    Logger.log('[MIN_BALANCE] Checking %s minimum balance', bankName);
+    
+    var summary;
+    if (bankName === 'Airwallex') {
+      summary = fetchAirwallexSummary_();
+    } else if (bankName === 'Mercury') {
+      summary = fetchMercurySummary_();
+    } else if (bankName === 'Revolut') {
+      summary = fetchRevolutSummary_();
+    } else {
+      Logger.log('[ERROR] Unknown bank for minimum balance check: %s', bankName);
+      return { needsTopup: false, currentBalance: 0, topupAmount: 0 };
+    }
+    
+    var currentBalance = summary.USD || 0;
+    var needsTopup = currentBalance < MIN_BALANCE_USD;
+    var topupAmount = needsTopup ? TOPUP_AMOUNT_USD : 0;
+    
+    Logger.log('[MIN_BALANCE] %s balance: $%.2f, needs topup: %s', bankName, currentBalance, needsTopup);
+    
+    return {
+      bankName: bankName,
+      currentBalance: currentBalance,
+      needsTopup: needsTopup,
+      topupAmount: topupAmount,
+      minimumRequired: MIN_BALANCE_USD
+    };
+    
+  } catch (e) {
+    Logger.log('[ERROR] Failed to check %s minimum balance: %s', bankName, e.message);
+    return { 
+      bankName: bankName,
+      needsTopup: false, 
+      currentBalance: 0, 
+      topupAmount: 0, 
+      error: e.message 
+    };
+  }
+}
+
+function transferFromRevolut_(toBank, amount, reason) {
+  try {
+    Logger.log('[TRANSFER] Initiating transfer from Revolut Main to %s: $%.2f - %s', toBank, amount, reason);
+    
+    if (toBank === 'Airwallex') {
+      // Transfer from Revolut to Airwallex
+      return revolutTransferToAirwallex_(amount, reason);
+    } else if (toBank === 'Mercury') {
+      // Transfer from Revolut to Mercury  
+      return revolutTransferToMercury_(amount, reason);
+    } else {
+      Logger.log('[ERROR] Cannot transfer from Revolut to unknown bank: %s', toBank);
+      return false;
+    }
+    
+  } catch (e) {
+    Logger.log('[ERROR] Failed to transfer from Revolut to %s: %s', toBank, e.message);
+    return false;
+  }
+}
+
+function checkAllBankMinimumBalances() {
+  try {
+    Logger.log('=== CHECKING ALL BANK MINIMUM BALANCES ===');
+    
+    var banksToCheck = ['Airwallex', 'Mercury', 'Revolut'];
+    var results = [];
+    var needsTopup = [];
+    
+    // Check Revolut balance first (need it to have funds for transfers)
+    var revolutResult = checkBankMinimumBalance_('Revolut');
+    results.push(revolutResult);
+    
+    if (!revolutResult.needsTopup) {
+      Logger.log('[MIN_BALANCE] Revolut has sufficient funds: $%.2f', revolutResult.currentBalance);
+      
+      // Check other banks
+      for (var i = 0; i < banksToCheck.length - 1; i++) { // Skip Revolut, already checked
+        var bankName = banksToCheck[i];
+        var bankResult = checkBankMinimumBalance_(bankName);
+        results.push(bankResult);
+        
+        if (bankResult.needsTopup) {
+          needsTopup.push(bankResult);
+          Logger.log('[MIN_BALANCE] ⚠️ %s needs topup: $%.2f < $%d', bankName, bankResult.currentBalance, MIN_BALANCE_USD);
+        }
+      }
+      
+      // Execute topups if needed
+      if (needsTopup.length > 0) {
+        Logger.log('[MIN_BALANCE] Executing %d topups...', needsTopup.length);
+        
+        for (var j = 0; j < needsTopup.length; j++) {
+          var topup = needsTopup[j];
+          Logger.log('[MIN_BALANCE] Topping up %s with $%.2f', topup.bankName, topup.topupAmount);
+          
+          var transferSuccess = transferFromRevolut_(
+            topup.bankName, 
+            topup.topupAmount, 
+            'Auto-topup: Balance $' + topup.currentBalance.toFixed(2) + ' below minimum $' + MIN_BALANCE_USD
+          );
+          
+          if (transferSuccess) {
+            Logger.log('[MIN_BALANCE] ✅ Successfully topped up %s', topup.bankName);
+          } else {
+            Logger.log('[MIN_BALANCE] ❌ Failed to topup %s', topup.bankName);
+          }
+          
+          // Small delay between transfers
+          Utilities.sleep(1000);
+        }
+        
+        Logger.log('[MIN_BALANCE] All topups completed');
+      } else {
+        Logger.log('[MIN_BALANCE] ✅ All banks have sufficient balances');
+      }
+      
+    } else {
+      Logger.log('[WARNING] Revolut balance too low for transfers: $%.2f < $%d', revolutResult.currentBalance, MIN_BALANCE_USD);
+    }
+    
+    Logger.log('=== MINIMUM BALANCE CHECK COMPLETED ===');
+    return results;
+    
+  } catch (e) {
+    Logger.log('[ERROR] Minimum balance check failed: %s', e.message);
+    return [];
+  }
+}
+
+function dryRunCheckAllBankMinimumBalances() {
+  try {
+    Logger.log('=== DRY RUN: CHECKING ALL BANK MINIMUM BALANCES ===');
+    
+    var banksToCheck = ['Airwallex', 'Mercury', 'Revolut'];
+    var results = [];
+    var needsTopup = [];
+    
+    // Check all banks
+    for (var i = 0; i < banksToCheck.length; i++) {
+      var bankName = banksToCheck[i];
+      var bankResult = checkBankMinimumBalance_(bankName);
+      results.push(bankResult);
+      
+      if (bankResult.needsTopup) {
+        needsTopup.push(bankResult);
+      }
+    }
+    
+    // Generate summary
+    var summary = '🏦 BANK BALANCE ANALYSIS (DRY RUN)\\n\\n';
+    
+    for (var j = 0; j < results.length; j++) {
+      var result = results[j];
+      var status = result.needsTopup ? '⚠️ NEEDS TOPUP' : '✅ OK';
+      summary += String.format(
+        '%s: $%.2f / $%d required %s\\n',
+        result.bankName,
+        result.currentBalance,
+        MIN_BALANCE_USD,
+        status
+      );
+      
+      if (result.needsTopup) {
+        summary += String.format('  → Would transfer $%.2f from Revolut\\n', result.topupAmount);
+      }
+    }
+    
+    summary += '\\n';
+    
+    if (needsTopup.length > 0) {
+      var totalToTransfer = needsTopup.reduce(function(sum, topup) { return sum + topup.topupAmount; }, 0);
+      summary += String.format(
+        '📊 SUMMARY: %d banks need topup\\nTotal to transfer: $%.2f\\n\\n',
+        needsTopup.length,
+        totalToTransfer
+      );
+      
+      // Check if Revolut can provide funds
+      var revolutResult = results[2]; // Revolut is last in the array
+      if (revolutResult.currentBalance >= totalToTransfer + MIN_BALANCE_USD) {
+        summary += '✅ Revolut has sufficient funds for all transfers';
+      } else {
+        summary += String.format(
+          '⚠️ Revolut may not have enough funds: $%.2f available, need $%.2f',
+          revolutResult.currentBalance,
+          totalToTransfer
+        );
+      }
+    } else {
+      summary += '✅ All banks have sufficient balances - no action needed';
+    }
+    
+    Logger.log('[DRY_RUN] %s', summary);
+    SpreadsheetApp.getUi().alert('Bank Balance Analysis (Dry Run)', summary, SpreadsheetApp.getUi().ButtonSet.OK);
+    
+    return results;
+    
+  } catch (e) {
+    Logger.log('[ERROR] Dry run minimum balance check failed: %s', e.message);
+    SpreadsheetApp.getUi().alert('Dry Run Failed', 'Error: ' + e.message, SpreadsheetApp.getUi().ButtonSet.OK);
+    return [];
+  }
+}
+
 /* ============== Bank Balance Functions ============== */
 function updateBankBalance_(sh, bankName, summary, note) {
   try {
@@ -1282,6 +1492,9 @@ function onOpen() {
   ui.createMenu('🏦 Banking')
     .addItem('💰 Update All Balances', 'updateAllBalances')
     .addItem('📊 Bank Account Summary', 'getBankAccountSummary')
+    .addSeparator()
+    .addItem('🔍 Check Minimum Balances (Dry Run)', 'dryRunCheckAllBankMinimumBalances')
+    .addItem('💳 Auto-Topup Low Balances', 'checkAllBankMinimumBalances')
     .addToUi();
     
   ui.createMenu('💰 Payments')
@@ -1309,6 +1522,8 @@ function onOpen() {
     .addItem('🚀 Test Daily Consolidation Trigger', 'testDailyConsolidationTrigger')
     .addItem('💰 Test Balance Update Trigger', 'testBalanceUpdateTrigger')
     .addItem('🔍 Mercury API Discovery', 'testMercuryApiDiscovery')
+    .addSeparator()
+    .addItem('🧪 Test Minimum Balance Trigger', 'testMinimumBalanceTrigger')
     .addToUi();
     
 }
@@ -1890,6 +2105,73 @@ function TRIGGER_updateAllBalances() {
       timestamp: new Date().toISOString(),
       message: 'Automatic balance update failed: ' + error.message
     };
+  }
+}
+
+function TRIGGER_checkBankMinimumBalances() {
+  Logger.log('=== AUTOMATIC BANK MINIMUM BALANCE CHECK TRIGGER ===');
+  Logger.log('[MIN_BALANCE_TRIGGER] Starting automatic minimum balance check');
+  
+  try {
+    // Run the main minimum balance check function
+    var results = checkAllBankMinimumBalances();
+    
+    Logger.log('[MIN_BALANCE_TRIGGER] Minimum balance check completed successfully');
+    Logger.log('[MIN_BALANCE_TRIGGER] Checked %d banks', results.length);
+    
+    return {
+      success: true,
+      timestamp: new Date().toISOString(),
+      message: 'Automatic minimum balance check completed successfully',
+      banksChecked: results.length,
+      results: results
+    };
+    
+  } catch (error) {
+    Logger.log('[MIN_BALANCE_TRIGGER] Minimum balance check failed: %s', error.message);
+    Logger.log('[MIN_BALANCE_TRIGGER] Error stack: %s', error.stack);
+    
+    return {
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString(),
+      message: 'Automatic minimum balance check failed: ' + error.message
+    };
+  }
+}
+
+function testMinimumBalanceTrigger() {
+  Logger.log('=== TESTING MINIMUM BALANCE TRIGGER ===');
+  
+  try {
+    var result = TRIGGER_checkBankMinimumBalances();
+    
+    if (result.success) {
+      Logger.log('[TEST] Minimum balance trigger test PASSED');
+      SpreadsheetApp.getUi().alert(
+        'Test Result', 
+        '✅ Minimum Balance Trigger Test PASSED\\n\\n' +
+        'Checked ' + result.banksChecked + ' banks\\n' +
+        'Timestamp: ' + result.timestamp,
+        SpreadsheetApp.getUi().ButtonSet.OK
+      );
+    } else {
+      Logger.log('[TEST] Minimum balance trigger test FAILED: %s', result.error);
+      SpreadsheetApp.getUi().alert(
+        'Test Failed', 
+        '❌ Minimum Balance Trigger Test FAILED\\n\\n' +
+        'Error: ' + result.error + '\\n' +
+        'Timestamp: ' + result.timestamp,
+        SpreadsheetApp.getUi().ButtonSet.OK
+      );
+    }
+    
+    return result;
+    
+  } catch (e) {
+    Logger.log('[ERROR] Minimum balance trigger test failed: %s', e.message);
+    SpreadsheetApp.getUi().alert('Test Error', 'Error: ' + e.message, SpreadsheetApp.getUi().ButtonSet.OK);
+    throw e;
   }
 }
 
