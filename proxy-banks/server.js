@@ -3062,11 +3062,4 @@ app.post('/incoming-sms', async (req, res) => {
   }
 });
 
-// Start the server
-const PORT_NUM = 3001;
-app.listen(PORT_NUM, () => {
-  console.log(`🚀 Proxy server running on port ${PORT_NUM}`);
-  console.log(`Health check: http://localhost:${PORT_NUM}/health`);
-  console.log(`Health check (alternative): http://localhost:${PORT_NUM}/healthz`);
-});
 
