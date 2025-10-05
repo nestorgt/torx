@@ -112,7 +112,7 @@ var TOPUP_AMOUNT_USD = 3000;          // Amount to transfer for topups
 var TS_CELL = 'A1';                   // Timestamp cell for payouts
 
 var USERS_FIRST_MONTH_ROW = 30;       // First month row for user payments
-var CURRENT_TIMEZONE = 'America/Montevideo';
+var CURRENT_TIMEZONE = 'Europe/Madrid';
 
 /* ============== Cell Mapping ============== */
 var CELLS = {
@@ -130,7 +130,7 @@ function nowStamp_() {
 }
 
 function nowStampCell_() {
-  return Utilities.formatDate(new Date(), CURRENT_TIMEZONE, "dd-MM HH:mm");
+  return Utilities.formatDate(new Date(), CURRENT_TIMEZONE, "MM-YY HH:MM");
 }
 
 function toBool_(value) {
@@ -327,7 +327,7 @@ function getMonthDisplayName(monthStr) {
   var monthNum = parseInt(parts[0]);
   var year = parts[1];
   
-  var monthNames = ['', 'January', 'February', 'March', 'April', 'May', 'June',
+  var monthNames = [, 'January', 'February', 'March', 'April', 'May', 'June',
                    'July', 'August', 'September', 'October', 'November', 'December'];
   
   var monthName = monthNames[monthNum] || parts[0];
@@ -666,8 +666,8 @@ function fetchMercuryMainBalance_() {
     if (accountsData && Array.isArray(accountsData.accounts)) {
       // Find the Main account (Mercury Checking ••2290)
       var mainAccount = accountsData.accounts.find(account => 
-        account.name?.includes('2290') || 
-        account.nickpage?.includes('2290') ||
+        (account.name ? account.name.includes('2290') : false) || 
+        (account.nickpage ? account.nickpage.includes('2290') : false) ||
         account.isMainAccount === true
       );
       
@@ -832,6 +832,19 @@ function mercuryTransferToMain_(fromAccountId, amount, currency, reference) {
     try {
       Logger.log('[MERCURY] Trying transfer endpoint: %s', endpoints[i]);
       var result = httpProxyPostJson_(endpoints[i], body);
+      
+      // Check if consolidation was requested (this is a success)
+      if (result && result.transfer && result.transfer.status === 'consolidation_requested') {
+        Logger.log('[MERCURY] ✅ Transfer endpoint %s success - consolidation requested', endpoints[i]);
+        return result;
+      }
+      
+      // Check if manual transfer is required (this is not a success, but a valid response)
+      if (result && result.transfer && result.transfer.status === 'manual_required') {
+        Logger.log('[MERCURY] ⚠️ Transfer endpoint %s - manual transfer required', endpoints[i]);
+        return result;
+      }
+      
       Logger.log('[MERCURY] ✅ Transfer endpoint %s success', endpoints[i]);
       return result;
     } catch (e) {
@@ -1040,6 +1053,482 @@ function airwallexGetBalances_(token) {
 
 function fetchNexoSummary_() { 
   return httpProxyJson_('/nexo/summary'); 
+}
+
+/* ============== Monthly Expense Calculation Functions ============== */
+
+function fetchMercuryExpenses_(month, year) { 
+  return httpProxyJson_('/mercury/transactions?month=' + month + '&year=' + year); 
+}
+
+function fetchAirwallexExpenses_(month, year) { 
+  // Airwallex: use direct integration (proxy may be blocked or misreport)
+  Logger.log('[AIRWALLEX] FORCING direct integration for %s-%s', month, year);
+  var result = fetchAirwallexExpensesDirect_(month, year);
+  Logger.log('[AIRWALLEX] Direct integration returned: Cards $%s', result.cardExpenses || 0);
+  return result;
+}
+
+function fetchRevolutExpenses_(month, year) { 
+  return httpProxyJson_('/revolut/transactions?month=' + month + '&year=' + year); 
+}
+
+function fetchAirwallexExpensesDirect_(month, year) {
+  var base = getProp_('AIRWALLEX_BASE') || 'https://api.airwallex.com';
+  var token = airwallexToken_();
+  var startDate = new Date(Number(year), Number(month) - 1, 1);
+  var endDate = new Date(Number(year), Number(month), 0);
+  endDate.setHours(23, 59, 59, 999); // End of day
+
+  Logger.log('[AIRWALLEX-DIRECT] Fetching financial transactions for %s-%s (%s to %s)', month, year, startDate.toISOString(), endDate.toISOString());
+
+  var totalCardExpenses = 0;
+  var totalTransfersOut = 0;
+  var totalTransfersIn = 0;
+  var cardDetails = [];
+  var transferDetails = [];
+  var processedTransactionIds = new Set(); // Track processed transaction IDs to avoid duplicates
+
+  try {
+    var page = 1;
+    var pageSize = 100;
+    var maxPages = 20;
+    var totalFetched = 0;
+    var augustCardTransactions = 0;
+    var augustTotalTransactions = 0;
+    
+    while (page <= maxPages) {
+      var url = base + '/api/v1/financial_transactions?page=' + page + '&page_size=' + pageSize;
+      Logger.log('[AIRWALLEX-DIRECT] Fetching: %s', url);
+      
+      var response = UrlFetchApp.fetch(url, {
+        method: 'get', 
+        headers: { 'Authorization': 'Bearer ' + token, 'Accept': 'application/json' },
+        muteHttpExceptions: true
+      });
+      
+      if (response.getResponseCode() !== 200) {
+        Logger.log('[AIRWALLEX-DIRECT] HTTP %s: %s', response.getResponseCode(), response.getContentText());
+        break;
+      }
+      
+      var data = JSON.parse(response.getContentText());
+      var transactions = data.items || [];
+      
+      if (transactions.length === 0) {
+        Logger.log('[AIRWALLEX-DIRECT] No more transactions on page %s', page);
+        break;
+      }
+      
+      totalFetched += transactions.length;
+      Logger.log('[AIRWALLEX-DIRECT] Page %s: %s transactions', page, transactions.length);
+      
+      for (var i = 0; i < transactions.length; i++) {
+        var tx = transactions[i];
+        
+        // Skip if already processed
+        if (processedTransactionIds.has(tx.id)) {
+          continue;
+        }
+        processedTransactionIds.add(tx.id);
+        
+        var amount = parseFloat(tx.amount) || 0;
+        var txDate = new Date(tx.settled_at || tx.created_at);
+        var isCard = tx.source_type === 'CARD';
+        var isTransfer = tx.source_type === 'TRANSFER';
+        
+        // Check if transaction is in the target month/year
+        var isTargetMonth = txDate.getMonth() === (Number(month) - 1) && txDate.getFullYear() === Number(year);
+        
+        if (isTargetMonth) {
+          augustTotalTransactions++;
+          
+          Logger.log('[AIRWALLEX-DIRECT] Processing August 2025: %s, amount=%s, source_type=%s, status=%s, settled=%s', 
+                    tx.id, amount, tx.source_type, tx.status, tx.settled_at || tx.created_at);
+          
+          if (isCard && tx.status === 'SETTLED' && amount < 0) {
+            var cardAmount = Math.abs(amount);
+            totalCardExpenses += cardAmount;
+            augustCardTransactions++;
+            cardDetails.push({ 
+              card: 'Airwallex Card', 
+              amount: cardAmount, 
+              description: tx.description || 'Card Purchase', 
+              date: tx.settled_at || tx.created_at,
+              transaction_type: tx.transaction_type,
+              id: tx.id
+            });
+            Logger.log('[AIRWALLEX-DIRECT] Added card transaction: $%s - %s', cardAmount, tx.description || 'Card Purchase');
+          } else if (isTransfer && tx.status === 'SETTLED') {
+            if (amount < 0) {
+              totalTransfersOut += Math.abs(amount);
+              transferDetails.push({ type: 'out', amount: Math.abs(amount), description: tx.description || 'Transfer out', date: tx.settled_at || tx.created_at });
+            } else {
+              totalTransfersIn += amount;
+              transferDetails.push({ type: 'in', amount: amount, description: tx.description || 'Transfer in', date: tx.settled_at || tx.created_at });
+            }
+          }
+        }
+      }
+      
+      page++;
+    }
+    
+    Logger.log('[AIRWALLEX-DIRECT] SUMMARY: August 2025 transactions processed: %s total, %s card transactions', augustTotalTransactions, augustCardTransactions);
+    Logger.log('[AIRWALLEX-DIRECT] Card details count: %s', cardDetails.length);
+
+    var result = {
+      month: Number(month), year: Number(year),
+      cardExpenses: Math.round(totalCardExpenses * 100) / 100,
+      transfersOut: Math.round(totalTransfersOut * 100) / 100,
+      transfersIn: Math.round(totalTransfersIn * 100) / 100,
+      cardDetails: cardDetails, transferDetails: transferDetails
+    };
+    
+    Logger.log('[AIRWALLEX-DIRECT] Result: Cards $%s, Transfers out $%s, Transfers in $%s', 
+              result.cardExpenses, result.transfersOut, result.transfersIn);
+    return result;
+    
+  } catch(e) {
+    Logger.log('[ERROR] Airwallex direct integration failed: %s', e.message);
+    return { 
+      month: Number(month), year: Number(year), 
+      cardExpenses: 0, transfersOut: 0, transfersIn: 0, 
+      cardDetails: [], transferDetails: [], 
+      error: 'Integration failed: ' + e.message 
+    };
+  }
+}
+
+function airwallexToken_() {
+  var clientId = getProp_('AIRWALLEX_CLIENT_ID');
+  var clientSecret = getProp_('AIRWALLEX_CLIENT_SECRET');
+  
+  if (!clientId || !clientSecret) {
+    throw new Error('Airwallex credentials not configured');
+  }
+  
+  var authResult = airwallexAuthenticate_(clientId, clientSecret);
+  if (!authResult.success || !authResult.token) {
+    throw new Error('Airwallex authentication failed: ' + authResult.error);
+  }
+  
+  return authResult.token;
+}
+
+function airwallexAuthenticate_(clientId, clientSecret) {
+  try {
+    var base = getProp_('AIRWALLEX_BASE') || 'https://api.airwallex.com';
+    var url = base + '/api/v1/authentication/login';
+    
+    var payload = {
+      client_id: clientId,
+      client_secret: clientSecret
+    };
+    
+    var response = UrlFetchApp.fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    });
+    
+    if (response.getResponseCode() !== 200) {
+      return { success: false, error: 'HTTP ' + response.getResponseCode() + ': ' + response.getContentText() };
+    }
+    
+    var data = JSON.parse(response.getContentText());
+    return { success: true, token: data.token };
+    
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+}
+
+function getRevolutToNestorTransfers_(month, year) {
+  try {
+    // Fetch Revolut transactions for the month
+    var re = fetchRevolutExpenses_(month, year);
+    var transfersToNestor = [];
+    
+    // Check USD transfer details
+    if (re && re.usdTransferDetails && Array.isArray(re.usdTransferDetails)) {
+      Logger.log('[REVOLUT-TO-NESTOR] Found %s USD transfer details', re.usdTransferDetails.length);
+      
+      for (var i = 0; i < re.usdTransferDetails.length; i++) {
+        var tx = re.usdTransferDetails[i];
+        var desc = (tx.description || '').toLowerCase();
+        var cp   = (tx.counterparty || '').toLowerCase();
+        var hay  = desc + ' ' + cp;
+        // Look for transfers to Nestor (match by name in description or counterparty)
+        if ((hay.indexOf('nestor') >= 0 && hay.indexOf('trabazo') >= 0) || hay.indexOf('nestor garcia trabazo') >= 0) {
+          transfersToNestor.push({
+            amount: tx.amount,
+            description: tx.description,
+            date: tx.date,
+            type: 'Revolut-to-Nestor (USD)'
+          });
+          Logger.log('[REVOLUT-TO-NESTOR] Found USD Nestor transfer: $%s - %s', tx.amount, tx.description);
+        }
+      }
+    }
+    
+    // Check EUR transfer details
+    if (re && re.eurTransferDetails && Array.isArray(re.eurTransferDetails)) {
+      Logger.log('[REVOLUT-TO-NESTOR] Found %s EUR transfer details', re.eurTransferDetails.length);
+      
+      for (var i = 0; i < re.eurTransferDetails.length; i++) {
+        var tx = re.eurTransferDetails[i];
+        var desc = (tx.description || '').toLowerCase();
+        var cp   = (tx.counterparty || '').toLowerCase();
+        var hay  = desc + ' ' + cp;
+        // Look for transfers to Nestor (match by name in description or counterparty)
+        if ((hay.indexOf('nestor') >= 0 && hay.indexOf('trabazo') >= 0) || hay.indexOf('nestor garcia trabazo') >= 0) {
+          transfersToNestor.push({
+            amount: tx.amount,
+            description: tx.description,
+            date: tx.date,
+            type: 'Revolut-to-Nestor (EUR)'
+          });
+          Logger.log('[REVOLUT-TO-NESTOR] Found EUR Nestor transfer: $%s - %s', tx.amount, tx.description);
+        }
+      }
+    }
+    
+    Logger.log('[REVOLUT-TO-NESTOR] Total transfers to Nestor: %s', transfersToNestor.length);
+    return transfersToNestor;
+    
+  } catch (e) {
+    Logger.log('[ERROR] Failed to get Revolut-to-Nestor transfers %s-%s: %s', month, year, e.message);
+    return [];
+  }
+}
+
+function buildMonthlyExpensesNotes_(me, ae, re, totalToNestor) {
+  var noteDetails = [];
+  
+  // 1. Airwallex
+  if (ae && ae.cardExpenses !== undefined) {
+    noteDetails.push('Airwallex: Cards $' + (ae.cardExpenses || 0).toFixed(2));
+  } else {
+    noteDetails.push('Airwallex: ERROR - ' + (ae && ae.error || 'Unknown error'));
+  }
+
+  // 2. Mercury
+  if (me && me.cardExpenses !== undefined) {
+    noteDetails.push('Mercury: Cards $' + (me.cardExpenses || 0).toFixed(2));
+  } else {
+    noteDetails.push('Mercury: ERROR - ' + (me && me.error || 'Unknown error'));
+  }  
+  
+  // 3. Revolut
+  if (re && re.cardExpenses !== undefined) {
+    noteDetails.push('Revolut: Cards $' + (re.cardExpenses || 0).toFixed(2));
+    
+    // Add Revolut-to-Nestor transfers as bullet line (now counted in total)
+    if (totalToNestor > 0) {
+      noteDetails.push('revtag: $' + totalToNestor.toFixed(2));
+    }
+  } else {
+    noteDetails.push('Revolut: ERROR - ' + (re && re.error || 'Unknown error'));
+  }
+  
+  return noteDetails;
+}
+
+function formatMonthlyExpensesNote_(noteDetails) {
+  var formattedNote = '';
+  noteDetails.forEach(function(detail) {
+    if (detail.includes('Mercury:') || detail.includes('Airwallex:') || detail.includes('Revolut:')) {
+      // Bank header - no bullet
+      formattedNote += detail + '\n';
+    } else {
+      // Error messages get bullet
+      formattedNote += '- ' + detail + '\n';
+    }
+  });
+  return formattedNote;
+}
+
+function updateMonthlyExpenses(month, year) {
+  // Validate parameters
+  if (!month || !year) {
+    Logger.log('[ERROR] updateMonthlyExpenses: month and year are required');
+    throw new Error('Month and year parameters are required');
+  }
+  if (month < 1 || month > 12) {
+    Logger.log('[ERROR] updateMonthlyExpenses: month must be 1-12, got: %s', month);
+    throw new Error('Month must be between 1 and 12');
+  }
+  if (year < 2025) {
+    Logger.log('[ERROR] updateMonthlyExpenses: year must be >= 2025, got: %s', year);
+    throw new Error('Year must be 2025 or later');
+  }
+  
+  Logger.log('--- INICIO updateMonthlyExpenses %s ---', mmYYYY_(month, year));
+  
+  var sh = sheet_(SHEET_NAME);
+  // Early exit if proxy is down
+  if (!proxyIsUp_()) {
+    setNoteOnly_(sh, TS_CELL, 'SERVER DOWN (proxy) ' + nowStamp_() + ' — cannot update ' + month + '-' + year);
+    Logger.log('[ERROR] Proxy health check failed. Aborting updateMonthlyExpenses.');
+    return;
+  }
+  
+  // Calculate target row: H8 for July 2025, H9 for August 2025, etc.
+  var targetRow = 8 + (year - 2025) * 12 + (month - 7);
+  
+  // Validate target row is reasonable
+  if (targetRow < 8 || targetRow > 200) {
+    Logger.log('[ERROR] updateMonthlyExpenses: calculated target row %s is out of range', targetRow);
+    throw new Error('Calculated target row ' + targetRow + ' is out of valid range');
+  }
+  
+  var targetCell = 'H' + targetRow;
+  
+  var totalCardExpenses = 0;
+  var noteDetails = [];
+  var me = null, ae = null, re = null; // Store results for ordered display
+  
+  // ===== MERCURY =====
+  try {
+    me = fetchMercuryExpenses_(month, year);
+    totalCardExpenses += Number(me.cardExpenses || 0);
+    Logger.log('[MERCURY] Month %s: Cards $%s', mmYYYY_(month, year), me.cardExpenses);
+  } catch(e) {
+    Logger.log('[ERROR] Mercury expenses %s: %s', mmYYYY_(month, year), e.message);
+  }
+  
+  // ===== AIRWALLEX =====
+  try {
+    ae = fetchAirwallexExpenses_(month, year);
+    totalCardExpenses += Number(ae.cardExpenses || 0);
+    Logger.log('[AIRWALLEX] Month %s: Cards $%s', mmYYYY_(month, year), ae.cardExpenses);
+  } catch(e) {
+    Logger.log('[ERROR] Airwallex expenses %s: %s', mmYYYY_(month, year), e.message);
+  }
+  
+  // ===== REVOLUT =====
+  try {
+    re = fetchRevolutExpenses_(month, year);
+    totalCardExpenses += Number(re.cardExpenses || 0);
+    Logger.log('[REVOLUT] Month %s: Cards $%s', mmYYYY_(month, year), re.cardExpenses);
+  } catch(e) {
+    Logger.log('[ERROR] Revolut expenses %s: %s', mmYYYY_(month, year), e.message);
+  }
+  
+  // ===== REVOLUT-TO-NESTOR TRANSFERS (revtag) =====
+  var revolutToNestor = getRevolutToNestorTransfers_(month, year);
+  var totalToNestor = 0;
+  if (revolutToNestor && revolutToNestor.length > 0) {
+    totalToNestor = revolutToNestor.reduce(function(sum, tx) { return sum + tx.amount; }, 0);
+    totalCardExpenses += totalToNestor;
+    Logger.log('[REVOLUT-TO-NESTOR] Month %s-%s: Transfers $%s (%s transactions)', month, year, totalToNestor.toFixed(2), revolutToNestor.length);
+  }
+  
+  // ===== BUILD NOTES USING HELPER FUNCTION =====
+  var noteDetails = buildMonthlyExpensesNotes_(me, ae, re, totalToNestor);
+  
+  // Write total card expenses to sheet
+  var finalNote = noteDetails.join('\n');
+  Logger.log('[NOTE] Final note for %s: "%s"', mmYYYY_(month, year), finalNote);
+  
+  // Format the note with proper line breaks
+  var formattedNote = formatMonthlyExpensesNote_(noteDetails);
+  
+  Logger.log('[NOTE] Formatted note: "%s"', formattedNote);
+  
+  // Set value and note directly
+  var targetRange = sh.getRange(targetCell);
+  targetRange.setValue(Number(totalCardExpenses));
+  targetRange.setNote(formattedNote);
+  
+  // Verify the note was added
+  var addedNote = sh.getRange(targetCell).getNote();
+  Logger.log('[VERIFY] Note added to %s: "%s"', targetCell, addedNote);
+  
+  Logger.log('[WRITE] Monthly expenses %s: $%s -> %s', mmYYYY_(month, year), totalCardExpenses.toFixed(2), targetCell);
+  
+  Logger.log('--- FIN updateMonthlyExpenses %s ---', mmYYYY_(month, year));
+}
+
+function updateCurrentMonthExpenses() {
+  var now = new Date();
+  var month = now.getMonth() + 1; // getMonth() returns 0-11
+  var year = now.getFullYear();
+  updateMonthlyExpenses(month, year);
+}
+
+function updateSpecificMonthExpenses(month, year) {
+  if (!month || !year) {
+    Logger.log('[ERROR] updateSpecificMonthExpenses: month y year son obligatorios');
+    return;
+  }
+  if (month < 1 || month > 12) {
+    Logger.log('[ERROR] updateSpecificMonthExpenses: month debe ser 1-12');
+    return;
+  }
+  if (year < 2025) {
+    Logger.log('[ERROR] updateSpecificMonthExpenses: year debe ser >= 2025');
+    return;
+  }
+  updateMonthlyExpenses(month, year);
+}
+
+function testMonthlyExpenses(month, year) {
+  if (!month || !year) { throw new Error('Month and year are required'); }
+  if (month < 1 || month > 12) { throw new Error('Month must be 1-12'); }
+  if (year < 2025) { throw new Error('Year must be >= 2025'); }
+
+  var totalCardExpenses = 0;
+  var noteDetails = [];
+  var me = null, ae = null, re = null;
+
+  try {
+    me = fetchMercuryExpenses_(month, year);
+    totalCardExpenses += Number(me.cardExpenses || 0);
+  } catch (e) {
+    // Error will be handled in ordered display
+  }
+
+  try {
+    ae = fetchAirwallexExpenses_(month, year);
+    totalCardExpenses += Number(ae.cardExpenses || 0);
+  } catch (e) {
+    // Error will be handled in ordered display
+  }
+
+  try {
+    re = fetchRevolutExpenses_(month, year);
+    totalCardExpenses += Number(re.cardExpenses || 0);
+  } catch (e) {
+    // Error will be handled in ordered display
+  }
+
+  // Add Revolut-to-Nestor transfers (revtag)
+  var revolutToNestor = getRevolutToNestorTransfers_(month, year);
+  var totalToNestor = 0;
+  if (revolutToNestor && revolutToNestor.length > 0) {
+    totalToNestor = revolutToNestor.reduce(function(sum, tx) { return sum + tx.amount; }, 0);
+    totalCardExpenses += totalToNestor;
+  }
+
+  // ===== BUILD NOTES USING HELPER FUNCTION =====
+  var noteDetails = buildMonthlyExpensesNotes_(me, ae, re, totalToNestor);
+  var formattedNote = formatMonthlyExpensesNote_(noteDetails);
+
+  Logger.log('[TEST RUN] %s-%s total cards $%s', month, year, (totalCardExpenses || 0).toFixed(2));
+  Logger.log('[TEST RUN] Details:\n%s', formattedNote);
+
+  return {
+    month: Number(month),
+    year: Number(year),
+    totalCardExpenses: Number(totalCardExpenses),
+    note: formattedNote,
+    mercury: me,
+    airwallex: ae,
+    revolut: re
+  };
 }
 
 /* ============== Intelligent Consolidation & Top-up System ============== */
@@ -1475,7 +1964,7 @@ function performCrossBankTopup_(bankBalances, thresholdUsd, transferAmountUsd, d
   var sourceBankCandidates = [];
   
   // 1. Try Revolut first
-  var revolutBalance = parseFloat(bankBalances.revolut?.USD || 0);
+  var revolutBalance = parseFloat((bankBalances.revolut ? bankBalances.revolut.USD : 0) || 0);
   if (revolutBalance >= thresholdUsd + transferAmountUsd) {
     sourceBankCandidates.push({
       bankName: 'Revolut',
@@ -1486,7 +1975,7 @@ function performCrossBankTopup_(bankBalances, thresholdUsd, transferAmountUsd, d
   }
   
   // 2. Try Mercury as fallback
-  var mercuryBalance = parseFloat(bankBalances.mercury?.USD || 0);
+  var mercuryBalance = parseFloat((bankBalances.mercury ? bankBalances.mercury.USD : 0) || 0);
   if (mercuryBalance >= thresholdUsd + transferAmountUsd) {
     sourceBankCandidates.push({
       bankName: 'Mercury',
@@ -1597,14 +2086,24 @@ function consolidateUsdFundsToMain_(options) {
   Logger.log('=== STARTING FUND CONSOLIDATION ===');
   Logger.log('[FUND_CONSOLIDATION] Starting USD fund consolidation (dryRun: %s)', options.dryRun);
   
-  // Check for pending transfers before starting
-  var hasPendingTransfers = checkPendingTransfers_();
+  // Check for pending transfers before starting (inline to avoid function recognition issues)
+  var hasPendingTransfers = false;
+  try {
+    var pendingTransfers = getProp_('pending_transfers');
+    if (pendingTransfers) {
+      var transfers = JSON.parse(pendingTransfers);
+      hasPendingTransfers = transfers.length > 0;
+    }
+  } catch (e) {
+    Logger.log('[FUND_CONSOLIDATION] Pending transfer check error: %s', e.message);
+  }
+  
   if (hasPendingTransfers && !options.force) {
     Logger.log('[FUND_CONSOLIDATION] Skipping consolidation - pending transfers detected');
     return {
       skipped: true,
       reason: 'Pending transfers detected',
-      pendingTransfers: getPendingTransfers_(),
+      pendingTransfers: [],
       totalProcessed: 0,
       totalFound: 0,
       movedTotal: 0,
@@ -1783,10 +2282,10 @@ function consolidateMercuryUsdFunds_(dryRun) {
       // Identify and skip Main account (Mercury Checking ••2290)
       var currency = account.currency || 'USD';
       var isMainAccount = (
-        account.name?.includes('2290') || 
-        account.nickname?.includes('2290') ||
+        (account.name ? account.name.includes('2290') : false) || 
+        (account.nickname ? account.nickname.includes('2290') : false) ||
         account.isMainAccount === true ||
-        account.nickname?.toLowerCase().includes('main')
+        (account.nickname ? account.nickname.toLowerCase().includes('main') : false)
       );
       
       // Skip non-USD accounts
@@ -1828,7 +2327,7 @@ function consolidateMercuryUsdFunds_(dryRun) {
               var mainAccountId = null;
               for (var j = 0; j < accounts.length; j++) {
                 var acc = accounts[j];
-                if (acc.name?.includes('2290') || acc.isMainAccount === true) {
+                if ((acc.name ? acc.name.includes('2290') : false) || acc.isMainAccount === true) {
                   mainAccountId = acc.id;
                   break;
                 }
@@ -1842,17 +2341,26 @@ function consolidateMercuryUsdFunds_(dryRun) {
               var transferResult = mercuryTransferToMain_(accountId, usdBalance, 'USD', 'Consolidate USD funds to Main');
               
               if (transferResult && transferResult.transfer && transferResult.transfer.status) {
-                if (transferResult.transfer.status === 'completed' || transferResult.transfer.status === 'processing') {
+                if (transferResult.transfer.status === 'completed' || transferResult.transfer.status === 'processing' || transferResult.transfer.status === 'consolidation_requested') {
                   transfer.status = 'success';
                   transfer.transactionId = transferResult.transfer.id;
                   result.movedTotal += usdBalance;
                   
                   // Track pending transfers (except for completed ones)
-                  if (transferResult.transfer.status === 'processing') {
+                  if (transferResult.transfer.status === 'processing' || transferResult.transfer.status === 'consolidation_requested') {
                     addPendingTransfer_(accountId, usdBalance, 'USD', transferResult.transfer.id, 'Mercury');
                   }
                   
-                  Logger.log('[MERCURY_FUNDS] Successfully moved $%s USD from %s to Main', usdBalance, accountName);
+                  Logger.log('[MERCURY_FUNDS] Successfully moved $%s USD from %s to Main (status: %s)', usdBalance, accountName, transferResult.transfer.status);
+                } else if (transferResult.transfer.status === 'manual_required') {
+                  transfer.status = 'manual_required';
+                  transfer.transactionId = transferResult.transfer.id;
+                  transfer.error = 'Manual transfer required - Mercury API does not support programmatic internal transfers';
+                  
+                  // Don't count as moved since it requires manual action
+                  result.errors.push('Manual transfer required: $' + usdBalance + ' USD from ' + accountName + ' - Mercury API limitation');
+                  
+                  Logger.log('[MERCURY_FUNDS] Manual transfer required: $%s USD from %s to Main (Mercury API limitation)', usdBalance, accountName);
                 } else {
                   transfer.status = 'failed';
                   transfer.error = 'Transfer status: ' + transferResult.transfer.status;
@@ -2174,13 +2682,13 @@ function dryRunCheckAllBankMinimumBalances() {
     }
     
     // Generate summary
-    var summary = '🏦 BANK BALANCE ANALYSIS (DRY RUN)\\n\\n';
+    var summary = '🏦 BANK BALANCE ANALYSIS (DRY RUN)\n\n';
     
     for (var j = 0; j < results.length; j++) {
       var result = results[j];
       var status = result.needsTopup ? '⚠️ NEEDS TOPUP' : '✅ OK';
       summary += String.format(
-        '%s: $%.2f / $%d required %s\\n',
+        '%s: $%.2f / $%d required %s\n',
         result.bankName,
         result.currentBalance,
         MIN_BALANCE_USD,
@@ -2188,16 +2696,16 @@ function dryRunCheckAllBankMinimumBalances() {
       );
       
       if (result.needsTopup) {
-        summary += String.format('  → Would transfer $%.2f from Revolut\\n', result.topupAmount);
+        summary += String.format('  → Would transfer $%.2f from Revolut\n', result.topupAmount);
       }
     }
     
-    summary += '\\n';
+    summary += '\n';
     
     if (needsTopup.length > 0) {
       var totalToTransfer = needsTopup.reduce(function(sum, topup) { return sum + topup.topupAmount; }, 0);
       summary += String.format(
-        '📊 SUMMARY: %d banks need topup\\nTotal to transfer: $%.2f\\n\\n',
+        '📊 SUMMARY: %d banks need topup\nTotal to transfer: $%.2f\n\n',
         needsTopup.length,
         totalToTransfer
       );
@@ -2284,6 +2792,7 @@ function updateAllBalances() {
     }
     
     // Update Airwallex - DISABLED due to API access issues
+    // Balance is set manually and should not be modified
     // try {
     //   var airwallexSummary = fetchAirwallexSummary_();
     //   updateBankBalance_(sh, 'Airwallex', airwallexSummary, 'Airwallex balance update');
@@ -2292,13 +2801,7 @@ function updateAllBalances() {
     //   Logger.log('[ERROR] Airwallex balance update failed: %s', e.message);
     // }
     
-    // Set Airwallex balance to zero
-    try {
-      updateBankBalance_(sh, 'Airwallex', { USD: 0, EUR: 0 }, 'Airwallex disabled');
-      totalUpdated++;
-    } catch (e) {
-      Logger.log('[ERROR] Airwallex placeholder update failed: %s', e.message);
-    }
+    Logger.log('[AIRWALLEX] Skipping balance update - manually set balance preserved');
     
     // Update Revolut
     try {
@@ -2328,6 +2831,16 @@ function updateAllBalances() {
     }
     
     Logger.log('[BALANCE] Updates completed: %s banks updated', totalUpdated);
+    
+    // Update monthly expenses for current month
+    try {
+      Logger.log('[EXPENSES] Starting monthly expense calculation...');
+      updateCurrentMonthExpenses();
+      Logger.log('[EXPENSES] Monthly expense calculation completed');
+    } catch (e) {
+      Logger.log('[ERROR] Monthly expense calculation failed: %s', e.message);
+    }
+    
     Logger.log('=== BALANCE UPDATE COMPLETED ===');
     
   } catch (e) {
@@ -2379,6 +2892,11 @@ function onOpen() {
     .addItem('📊 Show Balance Summary', 'menuShowBalanceSummary')
     .addItem('🔄 Update All Balances', 'menuUpdateAllBalances')
     .addSeparator()
+    // Monthly Expenses
+    .addItem('📊 Update Current Month Expenses', 'menuUpdateCurrentMonthExpenses')
+    .addItem('📅 Update Specific Month Expenses', 'menuUpdateSpecificMonthExpenses')
+    .addItem('🧪 Test Current Month Expenses', 'menuTestCurrentMonthExpenses')
+    .addSeparator()
     // Auto Topup
     .addItem('🔍 Check Minimum Balances (Dry Run)', 'dryRunCheckAllBankMinimumBalances')
     .addItem('💳 Auto-Topup Low Balances', 'checkAllBankMinimumBalances')
@@ -2414,13 +2932,13 @@ function onOpen() {
          .addItem('⏳ Check Pending Transfers', 'menuCheckPendingTransfers')
          .addItem('✅ Mark Transfer Complete', 'menuMarkTransferComplete')
          .addItem('🗑️ Clear Old Transfers', 'menuClearOldTransfers')
-   .addSeparator()
-   .addItem('🚀 Test Daily Consolidation Trigger', 'testDailyConsolidationTrigger')
-   .addItem('💰 Test Balance Update Trigger', 'testBalanceUpdateTrigger')
-   .addItem('🔍 Mercury API Discovery', 'testMercuryApiDiscovery')
+    .addSeparator()
+    .addItem('🚀 Test Daily Consolidation Trigger', 'testDailyConsolidationTrigger')
+    .addItem('💰 Test Balance Update Trigger', 'testBalanceUpdateTrigger')
+    .addItem('🔍 Mercury API Discovery', 'testMercuryApiDiscovery')
    .addSeparator()
    .addItem('🧪 Test Minimum Balance Trigger', 'testMinimumBalanceTrigger')
-   .addToUi();
+    .addToUi();
     
 }
 
@@ -2608,7 +3126,7 @@ function payUsersForMonth(monthStr) {
 function selectCustomMonthMenu() {
   var ui = SpreadsheetApp.getUi();
   
-  var response = ui.prompt('Select Custom Month', 'Enter month and year in format MM-YYYY\\n(for example: 03-2025 for March 2025)', ui.ButtonSet.OK_CANCEL);
+  var response = ui.prompt('Select Custom Month', 'Enter month and year in format MM-YYYY\n(for example: 03-2025 for March 2025)', ui.ButtonSet.OK_CANCEL);
   if (response.getSelectedButton() !== ui.Button.OK) {
     return;
   }
@@ -2625,18 +3143,18 @@ function selectCustomMonthMenu() {
   
   // Show dry run first
   var dryRunResult = dryRunPayUsersForMonth(monthInput);
-  var dryRunMessage = 'DRY RUN RESULTS for ' + monthDisplayName + ':\\n\\n' +
-    'Users to process: ' + dryRunResult.totalUsers + '\\n' +
-    'USD needed: $' + dryRunResult.totalPayoutUsd.toFixed(2) + '\\n' +
-    'EUR needed: €' + dryRunResult.totalPayoutEur.toFixed(2) + '\\n\\n' +
+  var dryRunMessage = 'DRY RUN RESULTS for ' + monthDisplayName + ':\n\n' +
+    'Users to process: ' + dryRunResult.totalUsers + '\n' +
+    'USD needed: $' + dryRunResult.totalPayoutUsd.toFixed(2) + '\n' +
+    'EUR needed: €' + dryRunResult.totalPayoutEur.toFixed(2) + '\n\n' +
     'Would you like to proceed with actual payments?';
   
   var proceedResponse = ui.alert('Confirmation Required', dryRunMessage, ui.ButtonSet.YES_NO);
   if (proceedResponse === ui.Button.YES) {
     var result = payUsersForMonth(monthInput);
-    ui.alert('Success', 'Payments completed for ' + monthDisplayName + '!\\n\\n' +
-      'Processed: ' + result.totalUsers + ' users\\n' +
-      'USD: $' + result.totalPayoutUsd.toFixed(2) + '\\n' +
+    ui.alert('Success', 'Payments completed for ' + monthDisplayName + '!\n\n' +
+      'Processed: ' + result.totalUsers + ' users\n' +
+      'USD: $' + result.totalPayoutUsd.toFixed(2) + '\n' +
       'EUR: €' + result.totalPayoutEur.toFixed(2), ui.ButtonSet.OK);
   }
 }
@@ -2658,9 +3176,9 @@ function selectMonthMenu() {
     'July', 'August', 'September', 'October', 'November', 'December'
   ];
   
-  var promptOptions = 'Select month for payments:\\n\\n';
+  var promptOptions = 'Select month for payments:\n\n';
   for (var i = 0; i < months.length; i++) {
-    promptOptions += (i + 1) + '. ' + monthNames[i] + ' ' + currentYear + ' (' + months[i] + ')\\n';
+    promptOptions += (i + 1) + '. ' + monthNames[i] + ' ' + currentYear + ' (' + months[i] + ')\n';
   }
   
   var response = ui.prompt('Payment Month Selection', promptOptions, ui.ButtonSet.OK_CANCEL);
@@ -2679,26 +3197,26 @@ function selectMonthMenu() {
   
   // Show dry run first
   var dryRunResult = dryRunPayUsersForMonth(selectedMonth);
-  var dryRunMessage = `DRY RUN RESULTS for ${monthDisplayName}:\\n\\n` +
-    `Users to process: ${dryRunResult.totalUsers}\\n` +
-    `USD needed: $${dryRunResult.totalPayoutUsd}\\n` +
-    `EUR needed: €${dryRunResult.totalPayoutEur}\\n\\n` +
-    `Would you like to proceed with actual payments?`;
+  var dryRunMessage = 'DRY RUN RESULTS for ' + monthDisplayName + ':\n\n' +
+    'Users to process: ' + dryRunResult.totalUsers + '\n' +
+    'USD needed: $' + dryRunResult.totalPayoutUsd + '\n' +
+    'EUR needed: €' + dryRunResult.totalPayoutEur + '\n\n' +
+    'Would you like to proceed with actual payments?';
   
   var proceedResponse = ui.alert('Confirmation Required', dryRunMessage, ui.ButtonSet.YES_NO);
   if (proceedResponse === ui.Button.YES) {
     var result = payUsersForMonth(selectedMonth);
-    ui.alert('Success', `Payments completed for ${monthDisplayName}!\\n\\n` +
-      `Processed: ${result.totalUsers} users\\n` +
-      `USD: $${result.totalPayoutUsd}\\n` +
-      'EUR: €' + result.totalPayoutEur + '', ui.ButtonSet.OK);
+    ui.alert('Success', 'Payments completed for ' + monthDisplayName + '!\n\n' +
+      'Processed: ' + result.totalUsers + ' users\n' +
+      'USD: $' + result.totalPayoutUsd + '\n' +
+      'EUR: €' + result.totalPayoutEur, ui.ButtonSet.OK);
   }
 }
 
 function selectMonthWithYear() {
   var ui = SpreadsheetApp.getUi();
   
-  var response = ui.prompt('Payment Month & Year', 'Enter month and year in format MM-YYYY\\n(for example: 03-2025 for March 2025)', ui.ButtonSet.OK_CANCEL);
+  var response = ui.prompt('Payment Month & Year', 'Enter month and year in format MM-YYYY\n(for example: 03-2025 for March 2025)', ui.ButtonSet.OK_CANCEL);
   if (response.getSelectedButton() !== ui.Button.OK) {
     return;
   }
@@ -2715,27 +3233,27 @@ function selectMonthWithYear() {
   
   // Show dry run first
   var dryRunResult = dryRunPayUsersForMonth(monthInput);
-  var dryRunMessage = `DRY RUN RESULTS for ${monthDisplayName}:\\n\\n` +
-    `Users to process: ${dryRunResult.totalUsers}\\n` +
-    `USD needed: $${dryRunResult.totalPayoutUsd}\\n` +
-    `EUR needed: €${dryRunResult.totalPayoutEur}\\n\\n` +
-    `Would you like to proceed with actual payments?`;
+  var dryRunMessage = 'DRY RUN RESULTS for ' + monthDisplayName + ':\n\n' +
+    'Users to process: ' + dryRunResult.totalUsers + '\n' +
+    'USD needed: $' + dryRunResult.totalPayoutUsd + '\n' +
+    'EUR needed: €' + dryRunResult.totalPayoutEur + '\n\n' +
+    'Would you like to proceed with actual payments?';
   
   var proceedResponse = ui.alert('Confirmation Required', dryRunMessage, ui.ButtonSet.YES_NO);
   if (proceedResponse === ui.Button.YES) {
     var result = payUsersForMonth(monthInput);
-    ui.alert('Success', `Payments completed for ${monthDisplayName}!\\n\\n` +
-      `Processed: ${result.totalUsers} users\\n` +
-      `USD: $${result.totalPayoutUsd}\\n` +
-      'EUR: €' + result.totalPayoutEur + '', ui.ButtonSet.OK);
+    ui.alert('Success', 'Payments completed for ' + monthDisplayName + '!\n\n' +
+      'Processed: ' + result.totalUsers + ' users\n' +
+      'USD: $' + result.totalPayoutUsd + '\n' +
+      'EUR: €' + result.totalPayoutEur, ui.ButtonSet.OK);
   }
 }
 
 function consolidateFundsMenu() {
   var ui = SpreadsheetApp.getUi();
   
-  var response = ui.alert('Fund Consolidation', 'This will consolidate USD funds from non-Main accounts to Main accounts\\n\\n' +
-    'Banks affected: Revolut, Mercury\\n\\n' +
+  var response = ui.alert('Fund Consolidation', 'This will consolidate USD funds from non-Main accounts to Main accounts\n\n' +
+    'Banks affected: Revolut, Mercury\n\n' +
     'Would you like to proceed?', ui.ButtonSet.YES_NO);
   
   if (response === ui.Button.YES) {
@@ -2743,10 +3261,10 @@ function consolidateFundsMenu() {
       Logger.log('=== STARTING FUND CONSOLIDATION ===');
       var result = consolidateFundsToMain();
       
-      var message = `Fund consolidation completed!\\n\\n` +
-        `Total processed: ${result.totalProcessed} accounts\\n` +
-        `USD found: $${result.totalFound.toFixed(2)}\\n` +
-        `USD moved: $${result.movedTotal.toFixed(2)}\\n` +
+      var message = 'Fund consolidation completed!\n\n' +
+        'Total processed: ' + result.totalProcessed + ' accounts\n' +
+        'USD found: $' + result.totalFound.toFixed(2) + '\n' +
+        'USD moved: $' + result.movedTotal.toFixed(2) + '\n' +
         'Errors: ' + result.errors.length;
       
       ui.alert('Success', message, ui.ButtonSet.OK);
@@ -2763,10 +3281,10 @@ function runTestFundConsolidation() {
     Logger.log('=== TESTING FUND CONSOLIDATION ===');
     var result = dryRunConsolidateFundsToMain();
     
-    var message = 'Fund consolidation test completed!\\n\\n' +
-      'Total processed: ' + result.totalProcessed + ' accounts\\n' +
-      'USD found: $' + result.totalFound.toFixed(2) + '\\n' +
-      'USD would move: $' + result.movedTotal.toFixed(2) + '\\n' +
+    var message = 'Fund consolidation test completed!\n\n' +
+      'Total processed: ' + result.totalProcessed + ' accounts\n' +
+      'USD found: $' + result.totalFound.toFixed(2) + '\n' +
+      'USD would move: $' + result.movedTotal.toFixed(2) + '\n' +
       'Errors: ' + result.errors.length;
     
     SpreadsheetApp.getUi().alert('Test Results', message, SpreadsheetApp.getUi().ButtonSet.OK);
@@ -2808,14 +3326,14 @@ function getBankAccountSummary() {
     var totalUsd = summaries.revolut.USD + summaries.mercury.mainUsd + summaries.airwallex.USD;
     var totalEur = summaries.revolut.EUR + summaries.airwallex.EUR;
     
-    var summaryText = '🏦 BANK ACCOUNT SUMMARY\\n\\n' +
-      '💵 TOTAL USD BALANCE: $' + totalUsd.toFixed(2) + '\\n' +
-      '💶 TOTAL EUR BALANCE: €' + totalEur.toFixed(2) + '\\n\\n' +
-      '📱 Revolut: $' + summaries.revolut.USD.toFixed(2) + ' USD, €' + summaries.revolut.EUR.toFixed(2) + ' EUR\\n' +
-      '🏦 Mercury: $' + summaries.mercury.mainUsd.toFixed(2) + ' USD (in Main)\\n' +
-      '🏢 Airwallex: $' + summaries.airwallex.USD.toFixed(2) + ' USD, €' + summaries.airwallex.EUR.toFixed(2) + ' EUR\\n\\n' +
-      '📊 Currency Distribution:\\n' +
-      '   USD: $' + totalUsd.toFixed(2) + '\\n' +
+    var summaryText = '🏦 BANK ACCOUNT SUMMARY\n\n' +
+      '💵 TOTAL USD BALANCE: $' + totalUsd.toFixed(2) + '\n' +
+      '💶 TOTAL EUR BALANCE: €' + totalEur.toFixed(2) + '\n\n' +
+      '📱 Revolut: $' + summaries.revolut.USD.toFixed(2) + ' USD, €' + summaries.revolut.EUR.toFixed(2) + ' EUR\n' +
+      '🏦 Mercury: $' + summaries.mercury.mainUsd.toFixed(2) + ' USD (in Main)\n' +
+      '🏢 Airwallex: $' + summaries.airwallex.USD.toFixed(2) + ' USD, €' + summaries.airwallex.EUR.toFixed(2) + ' EUR\n\n' +
+      '📊 Currency Distribution:\n' +
+      '   USD: $' + totalUsd.toFixed(2) + '\n' +
       '   EUR: €' + totalEur.toFixed(2);
     
     ui.alert('Bank Account Summary', summaryText, ui.ButtonSet.OK);
@@ -2867,10 +3385,10 @@ function testAirwallexApiDirect() {
     Logger.log('[TEST] ✅ Summary generated: %s', JSON.stringify(summary));
     
     var ui = SpreadsheetApp.getUi();
-    var message = 'Airwallex Direct API Test Results:\\n\\n' +
-      '✅ Authentication: SUCCESS\\n' +
-      '✅ Balance Fetch: ' + balances.length + ' entries\\n' +
-      '✅ Summary: $' + summary.USD + ' USD, €' + summary.EUR + ' EUR\\n' +
+    var message = 'Airwallex Direct API Test Results:\n\n' +
+      '✅ Authentication: SUCCESS\n' +
+      '✅ Balance Fetch: ' + balances.length + ' entries\n' +
+      '✅ Summary: $' + summary.USD + ' USD, €' + summary.EUR + ' EUR\n' +
       '📊 Total Accounts: ' + summary.count;
       
     ui.alert('Airwallex API Test', message, ui.ButtonSet.OK);
@@ -2915,11 +3433,11 @@ function testMercuryApiDiscovery() {
       }
     }
     
-    var message = '🔍 MERCURY API DISCOVERY RESULTS\\n\\n' +
-      '✅ Available endpoints: ' + availableEndpoints.length + '\\n' +
-      '❌ Failed endpoints: ' + failedEndpoints.length + '\\n\\n' +
-      'Available:\\n' + availableEndpoints.slice(0, 3).join('\\n') + '\\n' + (availableEndpoints.length > 3 ? '...' : '') + '\\n\\n' +
-      'Failed:\\n' + failedEndpoints.slice(0, 3).join('\\n') + '\\n' + (failedEndpoints.length > 3 ? '...' : '');
+    var message = '🔍 MERCURY API DISCOVERY RESULTS\n\n' +
+      '✅ Available endpoints: ' + availableEndpoints.length + '\n' +
+      '❌ Failed endpoints: ' + failedEndpoints.length + '\n\n' +
+      'Available:\n' + availableEndpoints.slice(0, 3).join('\n') + '\n' + (availableEndpoints.length > 3 ? '...' : '') + '\n\n' +
+      'Failed:\n' + failedEndpoints.slice(0, 3).join('\n') + '\n' + (failedEndpoints.length > 3 ? '...' : '');
     
     SpreadsheetApp.getUi().alert('Mercury API Discovery', message, SpreadsheetApp.getUi().ButtonSet.OK);
     
@@ -2937,42 +3455,42 @@ function testDailyConsolidationTrigger() {
     var result = intelligentConsolidationSystem_({ dryRun: true, force: false });
     Logger.log('[DAILY_TRIGGER_TEST] Intelligent consolidation result: %s', JSON.stringify(result, null, 2));
     
-    var message = '🚀 DAILY INTELLIGENT CONSOLIDATION TEST\\n\\n';
+    var message = '🚀 DAILY INTELLIGENT CONSOLIDATION TEST\n\n';
     
     if (result.status === 'SUCCESS') {
-      message += '✅ SUCCESS: Ready for daily automation\\n\\n';
+      message += '✅ SUCCESS: Ready for daily automation\n\n';
       
       if (result.summary.totalUsdConsolidated > 0) {
-        message += '📁 Internal Consolidation: $' + result.summary.totalUsdConsolidated.toFixed(2) + ' USD ready\\n';
+        message += '📁 Internal Consolidation: $' + result.summary.totalUsdConsolidated.toFixed(2) + ' USD ready\n';
       }
       
       if (result.summary.totalUsdTransferred > 0) {
-        message += '🔄 Cross-Bank Top-up: $' + result.summary.totalUsdTransferred.toFixed(2) + ' USD planned\\n';
+        message += '🔄 Cross-Bank Top-up: $' + result.summary.totalUsdTransferred.toFixed(2) + ' USD planned\n';
       }
       
       if (result.summary.totalUsdConsolidated === 0 && result.summary.totalUsdTransferred === 0) {
-        message += 'ℹ️ No actions needed - all balances optimal\\n';
+        message += 'ℹ️ No actions needed - all balances optimal\n';
       }
       
-      message += '\\n🏦 FINAL BALANCES:\\n';
+      message += '\n🏦 FINAL BALANCES:\n';
       Object.keys(result.summary.mainAccountBalances).forEach(bankName => {
         var balance = result.summary.mainAccountBalances[bankName];
         var statusIcon = balance >= result.thresholdUsd ? '✅' : '🚨';
-        message += statusIcon + ' ' + bankName.charAt(0).toUpperCase() + bankName.slice(1) + ': $' + balance.toFixed(2) + '\\n';
+        message += statusIcon + ' ' + bankName.charAt(0).toUpperCase() + bankName.slice(1) + ': $' + balance.toFixed(2) + '\n';
       });
       
     } else if (result.status === 'SKIPPED') {
-      message += '⏸️ SKIPPED: Pending transfers detected (' + (result.pendingTransfers?.length || 0) + ' transfers)\\n\\n';
+      message += '⏸️ SKIPPED: Pending transfers detected (' + ((result.pendingTransfers ? result.pendingTransfers.length : 0) || 0) + ' transfers)\n\n';
       message += '⏰ Will retry when transfers complete';
       
     } else {
-      message += '❌ ERROR: ' + result.error + '\\n\\n';
+      message += '❌ ERROR: ' + result.error + '\n\n';
       message += '⚠️ Daily automation may need manual attention';
     }
     
-    message += '\\n\\n📋 Threshold: $' + result.thresholdUsd + ' USD';
-    message += '\\n💰 Transfer Amount: $' + result.transferAmountUsd + ' USD';
-    message += '\\n⏰ Timestamp: ' + result.timestamp;
+    message += '\n\n📋 Threshold: $' + result.thresholdUsd + ' USD';
+    message += '\n💰 Transfer Amount: $' + result.transferAmountUsd + ' USD';
+    message += '\n⏰ Timestamp: ' + result.timestamp;
     
     SpreadsheetApp.getUi().alert('🚀 Daily Trigger Test', message, SpreadsheetApp.getUi().ButtonSet.OK);
     
@@ -3024,15 +3542,16 @@ function testIntelligentConsolidationManual() {
     Logger.log('[ERROR] Manual test failed: %s', e.message);
     throw e;
   }
+}
 
 function testBalanceUpdateTrigger() {
   try {
     Logger.log('=== TESTING BALANCE UPDATE TRIGGER ===');
     var result = TRIGGER_updateAllBalances();
     
-    var message = '💰 BALANCE UPDATE TRIGGER TEST\\n\\n' +
-      'Status: ' + (result.success ? '✅ Success' : '❌ Failed') + '\\n' +
-      'Message: ' + result.message + '\\n' +
+    var message = '💰 BALANCE UPDATE TRIGGER TEST\n\n' +
+      'Status: ' + (result.success ? '✅ Success' : '❌ Failed') + '\n' +
+      'Message: ' + result.message + '\n' +
       'Timestamp: ' + result.timestamp;
     
     SpreadsheetApp.getUi().alert('Balance Update Trigger Test', message, SpreadsheetApp.getUi().ButtonSet.OK);
@@ -3173,18 +3692,8 @@ function clearCompletedTransfer_(transactionId) {
 
 /* ============== Helper Functions for Future Banks ============== */
 function logBankIntegration_(bankName, transferResult, accountId, amount, currency) {
-  /*
-   * Helper function for future bank integrations
-   * 
-   * Usage in your new bank's transfer function:
-   * 
-   * if (transferResult.status === 'processing' || transferResult.status === 'pending') {
-   *   addPendingTransfer_(accountId, amount, currency, transferResult.id, bankName);
-   * }
-   * 
-   * Then call this function for logging:
-   * logBankIntegration_(bankName, transferResult, accountId, amount, currency);
-   */
+  // Helper function for future bank integrations
+  // Usage: logBankIntegration_(bankName, transferResult, accountId, amount, currency);
   
   Logger.log('[%s_TRANSFER] Transfer %s: %s $%s %s -> %s (Status: %s, ID: %s)', 
              bankName.toUpperCase(), 
@@ -3195,10 +3704,8 @@ function logBankIntegration_(bankName, transferResult, accountId, amount, curren
 }
 
 function getTransfersByBank_(bankName) {
-  /*
-   * Get all pending transfers for a specific bank
-   * Useful for bank-specific consolidation logic
-   */
+  // Get all pending transfers for a specific bank
+  // Useful for bank-specific consolidation logic
   try {
     var allTransfers = getPendingTransfers_();
     return allTransfers.filter(t => t.bankName === bankName);
@@ -3209,6 +3716,32 @@ function getTransfersByBank_(bankName) {
 }
 
 /* ============== Daily Trigger Functions ============== */
+
+// Simple test trigger to verify function recognition
+function TRIGGER_test() {
+  Logger.log('[TEST_TRIGGER] Test trigger executed successfully');
+  return 'Test trigger works';
+}
+
+// Function to set correct proxy token
+function setProxyToken() {
+  var props = PropertiesService.getScriptProperties();
+  props.setProperty('PROXY_TOKEN', '8c92f4a0a1b9d3c4e6f7asdasd213w1sda2');
+  props.setProperty('PROXY_URL', 'https://proxy.waresoul.org');
+  Logger.log('[PROXY] Set PROXY_TOKEN to 8c92f4a0a1b9d3c4e6f7asdasd213w1sda2 and PROXY_URL to https://proxy.waresoul.org');
+}
+
+// Minimal consolidation trigger
+function TRIGGER_consolidateUsdFundsToMainDailySimple() {
+  Logger.log('[SIMPLE_TRIGGER] Starting consolidation...');
+  try {
+    var result = consolidateUsdFundsToMain_({ dryRun: false });
+    Logger.log('[SIMPLE_TRIGGER] Result: %s', result ? 'Success' : 'Failed');
+  } catch (e) {
+    Logger.log('[SIMPLE_TRIGGER] Error: %s', e.message);
+  }
+}
+
 function TRIGGER_consolidateUsdFundsToMainDaily() {
   Logger.log('=== DAILY USD FUND CONSOLIDATION TRIGGER ===');
   Logger.log('[DAILY_TRIGGER] Starting automatic USD fund consolidation (DryRun: false)');
@@ -3357,8 +3890,8 @@ function testMinimumBalanceTrigger() {
       Logger.log('[TEST] Minimum balance trigger test PASSED');
       SpreadsheetApp.getUi().alert(
         'Test Result', 
-        '✅ Minimum Balance Trigger Test PASSED\\n\\n' +
-        'Checked ' + result.banksChecked + ' banks\\n' +
+        '✅ Minimum Balance Trigger Test PASSED\n\n' +
+        'Checked ' + result.banksChecked + ' banks\n' +
         'Timestamp: ' + result.timestamp,
         SpreadsheetApp.getUi().ButtonSet.OK
       );
@@ -3366,8 +3899,8 @@ function testMinimumBalanceTrigger() {
       Logger.log('[TEST] Minimum balance trigger test FAILED: %s', result.error);
       SpreadsheetApp.getUi().alert(
         'Test Failed', 
-        '❌ Minimum Balance Trigger Test FAILED\\n\\n' +
-        'Error: ' + result.error + '\\n' +
+        '❌ Minimum Balance Trigger Test FAILED\n\n' +
+        'Error: ' + result.error + '\n' +
         'Timestamp: ' + result.timestamp,
         SpreadsheetApp.getUi().ButtonSet.OK
       );
@@ -3439,11 +3972,11 @@ function testCompleteSystem() {
     Logger.log('[TEST] Complete system test results: %s', JSON.stringify(summary, null, 2));
     
     SpreadsheetApp.getUi().alert('System Test', 
-      'Unified System Test Results:\\n\\n' +
-      'Prerequisites: ' + summary.prerequisites + '\\n' +
-      'Consolidation: ' + summary.consolidation + '\\n' +
-      'Proxy: ' + summary.proxy + '\\n' +
-      'Mercury: ' + summary.mercury + '\\n\\n' +
+      'Unified System Test Results:\n\n' +
+      'Prerequisites: ' + summary.prerequisites + '\n' +
+      'Consolidation: ' + summary.consolidation + '\n' +
+      'Proxy: ' + summary.proxy + '\n' +
+      'Mercury: ' + summary.mercury + '\n\n' +
       'All systems operational! 🚀', 
       SpreadsheetApp.getUi().ButtonSet.OK);
     
@@ -3490,11 +4023,11 @@ function getCurrentMonthStatus() {
       }
     }
     
-    var statusText = '📊 PAYMENT STATUS - ' + monthStr + '\\n\\n' +
-      'Active Users: ' + activeUsers + '\\n' +
-      'Paid Users: ' + paidUsers + '\\n' +
-      'Remaining: ' + (activeUsers - paidUsers) + '\\n' +
-      'Total Amount: €' + totalAmount + '\\n\\n' +
+    var statusText = '📊 PAYMENT STATUS - ' + monthStr + '\n\n' +
+      'Active Users: ' + activeUsers + '\n' +
+      'Paid Users: ' + paidUsers + '\n' +
+      'Remaining: ' + (activeUsers - paidUsers) + '\n' +
+      'Total Amount: €' + totalAmount + '\n\n' +
       'Status: ' + (paidUsers === activeUsers ? '✅ All users paid' : '🔄 Pending payments');
     
     SpreadsheetApp.getUi().alert('Payment Status', statusText, SpreadsheetApp.getUi().ButtonSet.OK);
@@ -3552,13 +4085,13 @@ function testSheetValidation() {
       var headerRow = usersSheet.getRange(1, 2, 1, usersSheet.getLastColumn() - 1).getValues()[0];
       var userNames = headerRow.filter(function(val) { return val && String(val).trim() !== ''; });
       var emptyColumns = headerRow.length - userNames.length;
-      userInfo = 'Active Users: ' + userNames.length + '\\nEmpty Columns: ' + emptyColumns + '\\n';
+      userInfo = 'Active Users: ' + userNames.length + '\nEmpty Columns: ' + emptyColumns + '\n';
     }
     
-    var message = '📊 SHEET VALIDATION RESULTS\\n\\n' +
-      (criticalIssues.length === 0 ? 'Sheet Structure Valid ✅' : 'Sheet has Issues ❌') + '\\n\\n' + 
-      userInfo + '\\n' +
-      (criticalIssues.length === 0 ? 'Sheet is ready for for use! ✅' : 'Issues found:\\n' + criticalIssues.join('\\n'));
+    var message = '📊 SHEET VALIDATION RESULTS\n\n' +
+      (criticalIssues.length === 0 ? 'Sheet Structure Valid ✅' : 'Sheet has Issues ❌') + '\n\n' + 
+      userInfo + '\n' +
+      (criticalIssues.length === 0 ? 'Sheet is ready for for use! ✅' : 'Issues found:\n' + criticalIssues.join('\n'));
     
     SpreadsheetApp.getUi().alert('Sheet Validation', message, SpreadsheetApp.getUi().ButtonSet.OK);
     
@@ -3585,11 +4118,11 @@ function testPaymentSystem() {
     var validMonths = ['12-2025', '01-2026'].map(validateMonthString);
     var invalidMonths = ['13-2025', '00-2025'].map(function(m) { return validateMonthString(m); });
     
-    var message = '🧪 PAYMENT SYSTEM TEST RESULTS\\n\\n' +
-      'Prerequisites: ' + (prereqs.allGood ? '✅ PASS' : '❌ FAIL') + '\\n' +
-      'Currency Format: ' + (formattedEur ? '✅ PASS' : '❌ FAIL') + '\\n' +
-      'Month Validation: ' + (validMonths[0] && validMonths[1] ? '✅ PASS' : '❌ FAIL') + '\\n\\n' +
-      'Formatted EUR: ' + formattedEur + '\\n' +
+    var message = '🧪 PAYMENT SYSTEM TEST RESULTS\n\n' +
+      'Prerequisites: ' + (prereqs.allGood ? '✅ PASS' : '❌ FAIL') + '\n' +
+      'Currency Format: ' + (formattedEur ? '✅ PASS' : '❌ FAIL') + '\n' +
+      'Month Validation: ' + (validMonths[0] && validMonths[1] ? '✅ PASS' : '❌ FAIL') + '\n\n' +
+      'Formatted EUR: ' + formattedEur + '\n' +
       'Formatted USD: ' + formattedUsd;
     
     ui.alert('Payment System Test', message, ui.ButtonSet.OK);
@@ -3750,31 +4283,31 @@ function menuDryRunSpecificMonth() {
     
     if (response.getSelectedButton() === ui.Button.OK && response.getText()) {
       var month = response.getText().trim();
-      ui.alert('Testing Payment System', `Running dry run test for ${month}...\n\nThis will show what would happen without making actual payments.`, ui.ButtonSet.OK);
+      ui.alert('Testing Payment System', 'Running dry run test for ' + month + '...\n\nThis will show what would happen without making actual payments.', ui.ButtonSet.OK);
       
       // Call the specific month dry run function
       var result = dryRunPayUsersForSpecificMonth(month);
       
-      var resultText = `🧪 DRY RUN RESULT for ${month}:\n\n`;
-      resultText += `Status: ${result.status}\n`;
-      resultText += `Users Found: ${result.usersToPay}\n`;
-      resultText += `Total USD: $${result.totalUsd}\n`;
-      resultText += `Total USDX: ${result.totalUsdx}\n`;
-      resultText += `Processing Fee: $${(result.totalUsd * 0.014).toFixed(2)}\n\n`;
+      var resultText = '🧪 DRY RUN RESULT for ' + month + ':\n\n';
+      resultText += 'Status: ' + result.status + '\n';
+      resultText += 'Users Found: ' + result.usersToPay + '\n';
+      resultText += 'Total USD: $' + result.totalUsd + '\n';
+      resultText += 'Total USDX: ' + result.totalUsdx + '\n';
+      resultText += 'Processing Fee: $' + (result.totalUsd * 0.014).toFixed(2) + '\n\n';
       
       if (result.errors && result.errors.length > 0) {
-        resultText += `⚠️ Errors Found:\n`;
-        result.errors.forEach(error => resultText += `• ${error}\n`);
+        resultText += '⚠️ Errors Found:\n';
+        result.errors.forEach(error => resultText += '• ' + error + '\n');
       } else {
-        resultText += `✅ No errors found - ready for payment!`;
+        resultText += '✅ No errors found - ready for payment!';
       }
       
-      ui.alert(`🧪 Dry Run Complete`, resultText, ui.ButtonSet.OK);
+      ui.alert('🧪 Dry Run Complete', resultText, ui.ButtonSet.OK);
     }
   } catch (e) {
     Logger.log('[ERROR] Menu dry run specific month failed: %s', e.message);
     var ui = SpreadsheetApp.getUi();
-    ui.alert('❌ Dry Run Error', `Failed to run dry run for specific month:\n\n${e.message}`, ui.ButtonSet.OK);
+    ui.alert('❌ Dry Run Error', 'Failed to run dry run for specific month:\n\n' + e.message, ui.ButtonSet.OK);
   }
 }
 
@@ -3787,36 +4320,36 @@ function menuPaySpecificMonth() {
       var month = response.getText().trim();
       
       // Confirm the real payment
-      var confirmResponse = ui.alert('Final Confirmation', `🚨 ARE YOU SURE?\n\nThis will make REAL payments for ${month}!\n\nTotal payout will be calculated and transferred.\n\nType YES to confirm:`);
+      var confirmResponse = ui.alert('Final Confirmation', '🚨 ARE YOU SURE?\n\nThis will make REAL payments for ' + month + '!\n\nTotal payout will be calculated and transferred.\n\nType YES to confirm:');
       ui.prompt('Final Confirmation', 'Type YES to confirm real payment:', ui.ButtonSet.OK_CANCEL);
       
       var confirmResponse = ui.prompt('Final Confirmation', 'Type YES to confirm real payment:', ui.ButtonSet.OK_CANCEL);
       if (confirmResponse.getSelectedButton() === ui.Button.OK && confirmResponse.getText().trim().toUpperCase() === 'YES') {
         
-        ui.alert('Processing Payments', `Executing real payments for ${month}...\n\nThis may take a few minutes.`, ui.ButtonSet.OK);
+        ui.alert('Processing Payments', 'Executing real payments for ' + month + '...\n\nThis may take a few minutes.', ui.ButtonSet.OK);
         
         // Call the specific month payment function
         var result = payUsersForSpecificMonth(month);
         
-        var resultText = `💰 PAYMENT RESULT for ${month}:\n\n`;
-        resultText += `Status: ${result.status}\n`;
-        resultText += `Users Paid: ${result.usersPaid}\n`;
-        resultText += `Total Transferred: $${result.totalTransferred}\n`;
-        resultText += `Processing Fee: $${result.processingFee}\n\n`;
+        var resultText = '💰 PAYMENT RESULT for ' + month + ':\n\n';
+        resultText += 'Status: ' + result.status + '\n';
+        resultText += 'Users Paid: ' + result.usersPaid + '\n';
+        resultText += 'Total Transferred: $' + result.totalTransferred + '\n';
+        resultText += 'Processing Fee: $' + result.processingFee + '\n\n';
         
         if (result.transactionIds && result.transactionIds.length > 0) {
-          resultText += `🔗 Transactions:\n`;
-          result.transactionIds.forEach(id => resultText += `• ${id}\n`);
+          resultText += '🔗 Transactions:\n';
+          result.transactionIds.forEach(id => resultText += '• ' + id + '\n');
         }
         
         if (result.errors && result.errors.length > 0) {
-          resultText += `\n⚠️ Errors:\n`;
-          result.errors.forEach(error => resultText += `• ${error}\n`);
+          resultText += '\n⚠️ Errors:\n';
+          result.errors.forEach(error => resultText += '• ' + error + '\n');
         } else {
-          resultText += `✅ All payments successful!`;
+          resultText += '✅ All payments successful!';
         }
         
-        ui.alert(`💰 Payments Complete`, resultText, ui.ButtonSet.OK);
+        ui.alert('💰 Payments Complete', resultText, ui.ButtonSet.OK);
       } else {
         ui.alert('Payment Cancelled', 'Payment was cancelled. No payment was made.', ui.ButtonSet.OK);
       }
@@ -3824,7 +4357,7 @@ function menuPaySpecificMonth() {
   } catch (e) {
     Logger.log('[ERROR] Menu pay specific month failed: %s', e.message);
     var ui = SpreadsheetApp.getUi();
-    ui.alert('❌ Payment Error', `Failed to process payments for specific month:\n\n${e.message}`, ui.ButtonSet.OK);
+    ui.alert('❌ Payment Error', 'Failed to process payments for specific month:\n\n' + e.message, ui.ButtonSet.OK);
   }
 }
 
@@ -3835,92 +4368,108 @@ function menuShowAvailableBanks() {
     
     var summary = getBankAccountSummary();
     
-    var bankListText = `🏦 AVAILABLE BANKS:\n\n`;
-    bankListText += `🏦 Mercury:\n`;
-    bankListText += `  USD: $${(summary.mercury?.USD || 0).toFixed(2)}\n`;
-    bankListText += `  EUR: €${(summary.mercury?.EUR || 0).toFixed(2)}\n\n`;
-    bankListText += `🏦 Revolut:\n`;
-    bankListText += `  USD: $${(summary.revolut?.USD || 0).toFixed(2)}\n`;
-    bankListText += `  EUR: €${(summary.revolut?.EUR || 0).toFixed(2)}\n\n`;
-    bankListText += `🏦 Wise:\n`;
-    bankListText += `  USD: $${(summary.wise?.USD || 0).toFixed(2)}\n`;
-    bankListText += `  EUR: €${(summary.wise?.EUR || 0).toFixed(2)}\n\n`;
-    bankListText += `🏦 Nexo:\n`;
-    bankListText += `  USD: $${(summary.nexo?.USD || 0).toFixed(2)}\n`;
-    bankListText += `  EUR: €${(summary.nexo?.EUR || 0).toFixed(2)}\n\n`;
-    bankListText += `💸 TOTAL CONSOLIDATED:\n`;
-    bankListText += `  USD: $${(summary.totalConsolidated?.USD || 0).toFixed(2)}\n`;
-    bankListText += `  EUR: €${(summary.totalConsolidated?.EUR || 0).toFixed(2)}\n`;
+    var bankListText = '🏦 AVAILABLE BANKS:\n\n';
+    bankListText += '🏦 Mercury:\n';
+    bankListText += '  USD: $' + ((summary.mercury ? summary.mercury.USD : 0) || 0).toFixed(2) + '\n';
+    bankListText += '  EUR: €' + ((summary.mercury ? summary.mercury.EUR : 0) || 0).toFixed(2) + '\n\n';
+    bankListText += '🏦 Revolut:\n';
+    bankListText += '  USD: $' + ((summary.revolut ? summary.revolut.USD : 0) || 0).toFixed(2) + '\n';
+    bankListText += '  EUR: €' + ((summary.revolut ? summary.revolut.EUR : 0) || 0).toFixed(2) + '\n\n';
+    bankListText += '🏦 Wise:\n';
+    bankListText += '  USD: $' + ((summary.wise ? summary.wise.USD : 0) || 0).toFixed(2) + '\n';
+    bankListText += '  EUR: €' + ((summary.wise ? summary.wise.EUR : 0) || 0).toFixed(2) + '\n\n';
+    bankListText += '🏦 Nexo:\n';
+    bankListText += '  USD: $' + ((summary.nexo ? summary.nexo.USD : 0) || 0).toFixed(2) + '\n';
+    bankListText += '  EUR: €' + ((summary.nexo ? summary.nexo.EUR : 0) || 0).toFixed(2) + '\n\n';
+    bankListText += '💸 TOTAL CONSOLIDATED:\n';
+    bankListText += '  USD: $' + ((summary.totalConsolidated ? summary.totalConsolidated.USD : 0) || 0).toFixed(2) + '\n';
+    bankListText += '  EUR: €' + ((summary.totalConsolidated ? summary.totalConsolidated.EUR : 0) || 0).toFixed(2) + '\n';
     
     ui.alert('🏦 Available Banks', bankListText, ui.ButtonSet.OK);
     
   } catch (e) {
     Logger.log('[ERROR] Menu show available banks failed: %s', e.message);
     var ui = SpreadsheetApp.getUi();
-    ui.alert('❌ Bank List Error', `Failed to get bank information:\n\n${e.message}`, ui.ButtonSet.OK);
+    ui.alert('❌ Bank List Error', 'Failed to get bank information:\n\n' + e.message, ui.ButtonSet.OK);
   }
 }
 
 function menuTestConsolidation() {
   try {
     var ui = SpreadsheetApp.getUi();
-    ui.alert('Testing Consolidation', 'Running internal consolidation test...\n\nThis will show USD consolidation within each bank.', ui.ButtonSet.OK);
+    ui.alert('Testing Consolidation', 'Running internal consolidation test...', ui.ButtonSet.OK);
     
-    // Call the server-side internal consolidation test (dry run)
     var result = httpProxyJson_('/intelligent-consolidation/test');
+    var resultText = 'Consolidation Test Results:\n\n';
     
-    var resultText = `🧪 INTERNAL CONSOLIDATION TEST:\n\n`;
-    
-    if (result.status === 'SUCCESS') {
-      resultText += `✅ DRY RUN COMPLETED!\n\n`;
-      
-      // Current balances
-      if (result.steps.currentBalances) {
-        resultText += `📊 CURRENT BANK BALANCES:\n`;
-        Object.keys(result.steps.currentBalances).forEach(bankName => {
-          var balance = result.steps.currentBalances[bankName].USD || 0;
-          var accountName = result.steps.currentBalances[bankName].accountName || '';
-          resultText += `• ${bankName.charAt(0).toUpperCase() + bankName.slice(1)}: $${balance.toFixed(2)}`;
-          if (accountName) {
-            resultText += ` (${accountName})`;
-          }
-          resultText += '\n';
-        });
-        resultText += `\n`;
+    if (result && result.status === 'SUCCESS') {
+      resultText += 'SUCCESS: Dry run completed\n';
+      if (result.summary) {
+        resultText += 'Total USD to Consolidate: $' + result.summary.totalUsdConsolidated.toFixed(2);
       }
-      
-      // Internal consolidation plan
-      if (result.steps.internalPlan && result.steps.internalPlan.consolidations.length > 0) {
-        resultText += `📁 INTERNAL CONSOLIDATION PLAN:\n`;
-        result.steps.internalPlan.consolidations.forEach(consolidation => {
-          resultText += `• ${consolidation.bank}: Move $${consolidation.amount.toFixed(2)} to Main Account\n`;
-        });
-        resultText += `\n`;
-      } else {
-        resultText += `📁 INTERNAL CONSOLIDATION: All USD already on Main accounts\n\n`;
-      }
-      
-      // Summary
-      resultText += `📋 SUMMARY:\n`;
-      resultText += `📁 Total USD to Consolidate: $${result.summary.totalUsdConsolidated.toFixed(2)}\n`;
-      resultText += `⚡ Consolidation Needed: ${result.summary.needsConsolidation ? 'Yes' : 'No'}`;
-      
     } else {
-      resultText += `❌ TEST ERROR: ${result.error || result.detail || 'Unknown error'}\n\n`;
+      resultText += 'ERROR: ' + (result.error || 'Unknown error');
     }
     
-    ui.alert('🧪 Test Consolidation', resultText, ui.ButtonSet.OK);
+    ui.alert('Test Consolidation', resultText, ui.ButtonSet.OK);
     
   } catch (e) {
-    Logger.log('[ERROR] Menu test consolidation failed: %s', e.message);
+    Logger.log('Error: ' + e.message);
     var ui = SpreadsheetApp.getUi();
-    ui.alert('❌ Consolidation Test Error', `Failed to test consolidation:\n\n${e.message}`, ui.ButtonSet.OK);
+    ui.alert('Error', 'Failed: ' + e.message, ui.ButtonSet.OK);
   }
+}
+
+
+function simpleTest() {
+  SpreadsheetApp.getUi().alert('Simple test works!');
+}
+
+// TEMPORARY WRAPPER FUNCTIONS - Remove after fixing menu
+function menuCheckUSDBalancesDetails() {
+  return menuCheckUSDBalances();
+}
+
+function menuTestConsolidationDetails() {
+  return menuTestConsolidation();
+}
+
+function menuExecuteConsolidationDetails() {
+  return menuExecuteConsolidation();
+}
+
+function menuShowAvailableBanksDetails() {
+  return menuShowAvailableBanks();
+}
+
+// DEBUG: Check what menu functions exist vs what's being called
+function debugMenuFunctions() {
+  var availableFunctions = [
+    'menuCheckUSDBalances', 'menuTestConsolidation', 'menuExecuteConsolidation',
+    'menuShowAvailableBanks', 'menuCheckPendingTransfers', 'menuMarkTransferComplete',
+    'menuClearOldTransfers', 'menuDryRunSpecificMonth', 'menuPaySpecificMonth'
+  ];
+  
+  var ui = SpreadsheetApp.getUi();
+  var message = 'Available Menu Functions:\n\n';
+  availableFunctions.forEach(func => {
+    try {
+      if (typeof window[func] === 'function') {
+        message += '✅ ' + func + '\n';
+      } else {
+        message += '❌ ' + func + ' (not found)\n';
+      }
+    } catch (e) {
+      message += '❌ ' + func + ' (error: ' + e.message + ')\n';
+    }
+  });
+  
+  ui.alert('Menu Functions Debug', message, ui.ButtonSet.OK);
 }
 
 function reconcilePayoutWithSpreadsheet(receivedAmount, bankName) {
   try {
-    Logger.log(`[PAYOUT_RECONCILE] Reconciling payout: $${receivedAmount} from ${bankName}`);
+    Logger.log('[PAYOUT_RECONCILE] Reconciling payout: $' + receivedAmount + ' from ' + bankName);
     
     var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Payouts');
     if (!sheet) {
@@ -3936,7 +4485,7 @@ function reconcilePayoutWithSpreadsheet(receivedAmount, bankName) {
     }
     
     var payoutData = sheet.getRange(22, 1, lastRow - 21, 8).getValues();
-    Logger.log(`[PAYOUT_RECONCILE] Checking ${payoutData.length} payout entries...`);
+    Logger.log('[PAYOUT_RECONCILE] Checking ' + payoutData.length + ' payout entries...');
     
     var bestMatch = { row: -1, score: 0, adjustment: 0 };
     
@@ -4162,7 +4711,7 @@ function menuExecuteConsolidation() {
   } catch (e) {
     Logger.log('[ERROR] Menu execute consolidation failed: %s', e.message);
     var ui = SpreadsheetApp.getUi();
-    ui.alert('❌ Consolidation Error', `Failed to execute consolidation:\n\n${e.message}`, ui.ButtonSet.OK);
+    ui.alert('❌ Consolidation Error', 'Failed to execute consolidation:\n\n' + e.message, ui.ButtonSet.OK);
   }
 }
 
@@ -4176,8 +4725,8 @@ function menuCheckPendingTransfers() {
       return;
     }
     
-    var resultText = `⏳ PENDING TRANSFERS\n\n`;
-    resultText += `Found ${transfers.length} pending transfer(s):\n\n`;
+    var resultText = '⏳ PENDING TRANSFERS\n\n';
+    resultText += 'Found ' + transfers.length + ' pending transfer(s):\n\n';
     
     var totalPending = 0;
     for (var i = 0; i < transfers.length; i++) {
@@ -4185,24 +4734,24 @@ function menuCheckPendingTransfers() {
       var timeAgo = new Date().getTime() - new Date(transfer.timestamp).getTime();
       var hoursSince = (timeAgo / (1000 * 60 * 60)).toFixed(1);
       
-      resultText += `${i + 1}. ${transfer.bankName || 'Unknown'} - ${transfer.accountId}\n`;
-      resultText += `   Amount: $${transfer.amount} ${transfer.currency}\n`;
-      resultText += `   Started: ${hoursSince} hours ago\n`;
-      resultText += `   Transaction ID: ${transfer.transactionId}\n\n`;
+      resultText += (i + 1) + '. ' + (transfer.bankName || 'Unknown') + ' - ' + transfer.accountId + '\n';
+      resultText += '   Amount: $' + transfer.amount + ' ' + transfer.currency + '\n';
+      resultText += '   Started: ' + hoursSince + ' hours ago\n';
+      resultText += '   Transaction ID: ' + transfer.transactionId + '\n\n';
       
       totalPending += transfer.amount;
     }
     
-    resultText += `💰 Total Pending: $${totalPending.toFixed(2)} USD\n\n`;
-    resultText += `⚠️ Consolidation will be skipped until these complete.\n`;
-    resultText += `💰 Expected completion: 1-3 business days`;
+    resultText += '💰 Total Pending: $' + totalPending.toFixed(2) + ' USD\n\n';
+    resultText += '⚠️ Consolidation will be skipped until these complete.\n';
+    resultText += '💰 Expected completion: 1-3 business days';
     
     ui.alert('⏳ Pending Transfers Status', resultText, ui.ButtonSet.OK);
     
   } catch (e) {
     Logger.log('[ERROR] Menu check pending transfers failed: %s', e.message);
     var ui = SpreadsheetApp.getUi();
-    ui.alert('❌ Transfer Check Error', `Failed to check pending transfers:\n\n${e.message}`, ui.ButtonSet.OK);
+    ui.alert('❌ Transfer Check Error', 'Failed to check pending transfers:\n\n' + e.message, ui.ButtonSet.OK);
   }
 }
 
@@ -4221,7 +4770,7 @@ function menuClearOldTransfers() {
   } catch (e) {
     Logger.log('[ERROR] Menu clear old transfers failed: %s', e.message);
     var ui = SpreadsheetApp.getUi();
-    ui.alert('❌ Clear Error', `Failed to clear transfers:\n\n${e.message}`, ui.ButtonSet.OK);  
+    ui.alert('❌ Clear Error', 'Failed to clear transfers:\n\n' + e.message, ui.ButtonSet.OK);  
   }
 }
 
@@ -4236,7 +4785,7 @@ function menuCheckUSDBalances() {
   } catch (e) {
     Logger.log('[ERROR] Menu USD balance check failed: %s', e.message);
     var ui = SpreadsheetApp.getUi();
-    ui.alert('❌ USD Balance Check Error', `Failed to check USD balances:\n\n${e.message}\n\n⏰ ${new Date().toLocaleString()}`, ui.ButtonSet.OK);
+    ui.alert('❌ USD Balance Check Error', 'Failed to check USD balances:\n\n' + e.message + '\n\n⏰ ' + new Date().toLocaleString(), ui.ButtonSet.OK);
   }
 }
 
@@ -4276,11 +4825,95 @@ function menuUpdateAllBalances() {
     updateAllBalances();
     
     // Show completion dialog instead of writing to cells
-    ui.alert('✅ Update Complete', `All bank balances have been updated successfully!\n\n⏰ Updated: ${new Date().toLocaleString()}`, ui.ButtonSet.OK);
+    ui.alert('✅ Update Complete', 'All bank balances have been updated successfully!\n\n⏰ Updated: ' + new Date().toLocaleString(), ui.ButtonSet.OK);
     
   } catch (e) {
     Logger.log('[ERROR] Menu balance update failed: %s', e.message);
     displayErrorDialog('Balance Update Error', e.message);
+  }
+}
+
+function menuUpdateCurrentMonthExpenses() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Expense Update', 'Updating current month expenses...', ui.ButtonSet.OK);
+    
+    updateCurrentMonthExpenses();
+    
+    var now = new Date();
+    var month = now.getMonth() + 1;
+    var year = now.getFullYear();
+    
+    ui.alert('✅ Expense Update Complete', 'Current month expenses have been updated successfully!\n\n📅 Month: ' + month + '-' + year + '\n⏰ Updated: ' + new Date().toLocaleString(), ui.ButtonSet.OK);
+    
+  } catch (e) {
+    Logger.log('[ERROR] Menu expense update failed: %s', e.message);
+    displayErrorDialog('Expense Update Error', e.message);
+  }
+}
+
+function menuUpdateSpecificMonthExpenses() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    
+    // Prompt for month
+    var monthResponse = ui.prompt('Month Selection', 'Enter month (1-12):', ui.ButtonSet.OK_CANCEL);
+    if (monthResponse.getSelectedButton() !== ui.Button.OK) {
+      return;
+    }
+    
+    var month = parseInt(monthResponse.getResponseText());
+    if (isNaN(month) || month < 1 || month > 12) {
+      ui.alert('Error', 'Month must be between 1 and 12', ui.ButtonSet.OK);
+      return;
+    }
+    
+    // Prompt for year
+    var yearResponse = ui.prompt('Year Selection', 'Enter year (e.g., 2025):', ui.ButtonSet.OK_CANCEL);
+    if (yearResponse.getSelectedButton() !== ui.Button.OK) {
+      return;
+    }
+    
+    var year = parseInt(yearResponse.getResponseText());
+    if (isNaN(year) || year < 2025) {
+      ui.alert('Error', 'Year must be 2025 or later', ui.ButtonSet.OK);
+      return;
+    }
+    
+    ui.alert('Expense Update', 'Updating expenses for ' + month + '-' + year + '...', ui.ButtonSet.OK);
+    
+    updateSpecificMonthExpenses(month, year);
+    
+    ui.alert('✅ Expense Update Complete', 'Expenses for ' + month + '-' + year + ' have been updated successfully!\n\n⏰ Updated: ' + new Date().toLocaleString(), ui.ButtonSet.OK);
+    
+  } catch (e) {
+    Logger.log('[ERROR] Menu specific month expense update failed: %s', e.message);
+    displayErrorDialog('Expense Update Error', e.message);
+  }
+}
+
+function menuTestCurrentMonthExpenses() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Expense Test', 'Testing current month expenses (data only)...', ui.ButtonSet.OK);
+    
+    var now = new Date();
+    var month = now.getMonth() + 1;
+    var year = now.getFullYear();
+    
+    var result = testMonthlyExpenses(month, year);
+    
+    var message = '📊 EXPENSE TEST RESULTS\n\n' +
+                  '📅 Month: ' + month + '-' + year + '\n' +
+                  '💰 Total Card Expenses: $' + result.totalCardExpenses.toFixed(2) + '\n\n' +
+                  '📝 DETAILS:\n' + result.note + '\n' +
+                  '⏰ Tested: ' + new Date().toLocaleString();
+    
+    ui.alert('✅ Expense Test Complete', message, ui.ButtonSet.OK);
+    
+  } catch (e) {
+    Logger.log('[ERROR] Menu expense test failed: %s', e.message);
+    displayErrorDialog('Expense Test Error', e.message);
   }
 }
 
@@ -4340,10 +4973,10 @@ function checkIndividualBankBalances() {
     
     if (mercuryStatus === 'LOW') {
       mercuryReport.shortfall = THRESHOLD_USD - mercuryBalance;
-      mercuryReport.message = `⚠️ Below threshold by $${mercuryReport.shortfall.toFixed(2)}`;
+      mercuryReport.message = '⚠️ Below threshold by $' + mercuryReport.shortfall.toFixed(2);
     } else {
       mercuryReport.surplus = mercuryBalance - THRESHOLD_USD;
-      mercuryReport.message = `✅ Above threshold (+$${mercuryReport.surplus.toFixed(2)})`;
+      mercuryReport.message = '✅ Above threshold (+$' + mercuryReport.surplus.toFixed(2) + ')';
     }
     results.banks.push(mercuryReport);
     
@@ -4360,10 +4993,10 @@ function checkIndividualBankBalances() {
     
     if (revolutStatus === 'LOW') {
       revolutReport.shortfall = THRESHOLD_USD - revolutBalance;
-      revolutReport.message = `🚨 Below threshold by $${revolutReport.shortfall.toFixed(2)} - Transfer $${TRANSFER_AMOUNT_USD}`;
+      revolutReport.message = '🚨 Below threshold by $' + revolutReport.shortfall.toFixed(2) + ' - Transfer $' + TRANSFER_AMOUNT_USD;
     } else {
       revolutReport.surplus = revolutBalance - THRESHOLD_USD;
-      revolutReport.message = `✅ Above threshold (+$${revolutReport.surplus.toFixed(2)})`;
+      revolutReport.message = '✅ Above threshold (+$' + revolutReport.surplus.toFixed(2) + ')';
     }
     results.banks.push(revolutReport);
     
@@ -4439,53 +5072,53 @@ function displayBalanceDialog(result) {
   try {
     var ui = SpreadsheetApp.getUi();
     var title = '💰 USD Balance Check';
-    var message = `📊 BANK BALANCE STATUS\n\n`;
+    var message = '📊 BANK BALANCE STATUS\n\n';
     
     if (result.status === 'ALERT') {
-      message += `🚨 BANK BALANCE ALERT!\n\n`;
-      message += `🎯 Threshold per bank: $1,000\n\n`;
+      message += '🚨 BANK BALANCE ALERT!\n\n';
+      message += '🎯 Threshold per bank: $1,000\n\n';
       
       // Add bank status with visual indicators
-      var mercuryStatus = result.mercury?.status === 'OK' ? '✅' : '🚨';
-      var revolutStatus = result.revolut?.status === 'OK' ? '✅' : '🚨';
+      var mercuryStatus = (result.mercury ? result.mercury.status : 0) === 'OK' ? '✅' : '🚨';
+      var revolutStatus = (result.revolut ? result.revolut.status : 0) === 'OK' ? '✅' : '🚨';
       
-      message += `🏦 Mercury Main: $${(result.mercury?.balance || 0).toFixed(2)} ${mercuryStatus}\n`;
-      message += `🏦 Revolut: $${(result.revolut?.balance || 0).toFixed(2)} ${revolutStatus}\n\n`;
+      message += '🏦 Mercury Main: $' + ((result.mercury ? result.mercury.balance : 0) || 0).toFixed(2) + ' ' + mercuryStatus + '\n';
+      message += '🏦 Revolut: $' + ((result.revolut ? result.revolut.balance : 0) || 0).toFixed(2) + ' ' + revolutStatus + '\n\n';
       
       // Add low balance details
       var lowBanks = [];
-      if ((result.mercury?.balance || 0) < 1000) {
-        var shortage = (1000 - (result.mercury?.balance || 0)).toFixed(2);
-        lowBanks.push(`MERCURY MAIN: Below threshold (-$${shortage})\n💸 Recommended Transfer: $2,000`);
+      if (((result.mercury ? result.mercury.balance : 0) || 0) < 1000) {
+        var shortage = (1000 - ((result.mercury ? result.mercury.balance : 0) || 0)).toFixed(2);
+        lowBanks.push('MERCURY MAIN: Below threshold (-$' + shortage + ')\n💸 Recommended Transfer: $2,000');
       }
-      if ((result.revolut?.balance || 0) < 1000) {
-        var shortage = (1000 - (result.revolut?.balance || 0)).toFixed(2);
-        lowBanks.push(`REVOLUT: Below threshold (-$${shortage})\n💸 Recommended Transfer: $2,000`);
+      if (((result.revolut ? result.revolut.balance : 0) || 0) < 1000) {
+        var shortage = (1000 - ((result.revolut ? result.revolut.balance : 0) || 0)).toFixed(2);
+        lowBanks.push('REVOLUT: Below threshold (-$' + shortage + ')\n💸 Recommended Transfer: $2,000');
       }
       
       if (lowBanks.length > 0) {
         message += lowBanks.join('\n\n') + '\n\n';
       }
       
-      message += `⚠️ Consider topping up low accounts!`;
+      message += '⚠️ Consider topping up low accounts!';
       
     } else if (result.status === 'OK') {
-      message += `✅ HEALTHY STATUS\n\n`;
-      message += `🎯 Threshold per bank: $1,000\n\n`;
+      message += '✅ HEALTHY STATUS\n\n';
+      message += '🎯 Threshold per bank: $1,000\n\n';
       
-      message += `🏦 Mercury Main: $${(result.mercury?.balance || 0).toFixed(2)} ✅\n`;
-      message += `🏦 Revolut: $${(result.revolut?.balance || 0).toFixed(2)} ✅\n\n`;
+      message += '🏦 Mercury Main: $' + ((result.mercury ? result.mercury.balance : 0) || 0).toFixed(2) + ' ✅\n';
+      message += '🏦 Revolut: $' + ((result.revolut ? result.revolut.balance : 0) || 0).toFixed(2) + ' ✅\n\n';
       
-      var totalSurplus = (result.mercury?.surplus || 0) + (result.revolut?.surplus || 0);
-      message += `📈 Total Surplus Above Threshold: $${totalSurplus.toFixed(2)}\n\n`;
-      message += `✅ All banks above $1,000 threshold`;
+      var totalSurplus = ((result.mercury ? result.mercury.surplus : 0) || 0) + ((result.revolut ? result.revolut.surplus : 0) || 0);
+      message += '📈 Total Surplus Above Threshold: $' + totalSurplus.toFixed(2) + '\n\n';
+      message += '✅ All banks above $1,000 threshold';
     } else {
-      message += `❌ ERROR STATUS\n\n`;
-      message += `Error: ${result.error || 'Unknown error'}\n\n`;
-      message += `Please check logs for details`;
+      message += '❌ ERROR STATUS\n\n';
+      message += 'Error: ' + (result.error || 'Unknown error') + '\n\n';
+      message += 'Please check logs for details';
     }
     
-    message += `\n\n⏰ Checked: ${new Date().toLocaleString()}`;
+    message += '\n\n⏰ Checked: ' + new Date().toLocaleString();
     
     ui.alert(title, message, ui.ButtonSet.OK);
     
@@ -4500,43 +5133,43 @@ function displayIndividualBanksDialog(result) {
   try {
     var ui = SpreadsheetApp.getUi();
     var title = '🏦 Individual Bank Check';
-    var message = `🏦 Individual Bank Balance Analysis\n\n`;
+    var message = '🏦 Individual Bank Balance Analysis\n\n';
     
     if (result.overallStatus === 'ALERT') {
-      message += `🚨 OVERALL STATUS: ALERT\n`;
+      message += '🚨 OVERALL STATUS: ALERT\n';
     } else {
-      message += `✅ OVERALL STATUS: HEALTHY\n`;
+      message += '✅ OVERALL STATUS: HEALTHY\n';
     }
     
-    message += `🎯 Threshold: $${result.thresholdUSD}\n`;
-    message += `💸 Transfer Amount: $${result.transferAmountUSD}\n\n`;
+    message += '🎯 Threshold: $' + result.thresholdUSD + '\n';
+    message += '💸 Transfer Amount: $' + result.transferAmountUSD + '\n\n';
     
     for (var i = 0; i < result.banks.length; i++) {
       var bank = result.banks[i];
-      message += `🏦 ${bank.name}\n`;
-      message += `  Balance: $${bank.balance.toFixed(2)}\n`;
-      message += `  Status: ${bank.status === 'OK' ? '✅ OK' : '🚨 LOW'}\n`;
+      message += '🏦 ' + bank.name + '\n';
+      message += '  Balance: $' + bank.balance.toFixed(2) + '\n';
+      message += '  Status: ' + (bank.status === 'OK' ? '✅ OK' : '🚨 LOW') + '\n';
       
       if (bank.status === 'LOW' && bank.shortfall) {
-        message += `  Shortfall: $${bank.shortfall.toFixed(2)}\n`;
-        message += `  Transfer Needed: $${bank.transferNeeded}\n`;
+        message += '  Shortfall: $' + bank.shortfall.toFixed(2) + '\n';
+        message += '  Transfer Needed: $' + bank.transferNeeded + '\n';
       } else if (bank.surplus) {
-        message += `  Surplus: +$${bank.surplus.toFixed(2)}\n`;
+        message += '  Surplus: +$' + bank.surplus.toFixed(2) + '\n';
       }
       
-      message += `  Message: ${bank.message}\n\n`;
+      message += '  Message: ' + bank.message + '\n\n';
     }
     
     if (result.actionRequired && result.actionRequired.length > 0) {
-      message += `🎯 ACTIONS REQUIRED:\n`;
+      message += '🎯 ACTIONS REQUIRED:\n';
       for (var j = 0; j < result.actionRequired.length; j++) {
         var action = result.actionRequired[j];
-        message += `• Transfer $${action.transferNeeded} to ${action.name}\n`;
+        message += '• Transfer $' + action.transferNeeded + ' to ' + action.name + '\n';
       }
-      message += `\n`;
+      message += '\n';
     }
     
-    message += `⏰ Checked: ${new Date().toLocaleString()}`;
+    message += '⏰ Checked: ' + new Date().toLocaleString();
     
     ui.alert(title, message, ui.ButtonSet.OK);
     
@@ -4551,23 +5184,23 @@ function displaySummaryDialog(result) {
   try {
     var ui = SpreadsheetApp.getUi();
     var title = '📊 Balance Summary';
-    var message = `📊 Complete Balance Summary\n\n`;
+    var message = '📊 Complete Balance Summary\n\n';
     
-    message += `💵 TOTAL USD BALANCE: $${(result.totals?.totalUSD || 0).toFixed(2)}\n`;
-    message += `💶 TOTAL EUR BALANCE: €${(result.totals?.totalEUR || 0).toFixed(2)}\n\n`;
+    message += '💵 TOTAL USD BALANCE: $' + ((result.totals ? result.totals.totalUSD : 0) || 0).toFixed(2) + '\n';
+    message += '💶 TOTAL EUR BALANCE: €' + ((result.totals ? result.totals.totalEUR : 0) || 0).toFixed(2) + '\n\n';
     
-    message += `🏦 BANK BREAKDOWN:\n`;
-    message += `• Mercury USD: $${(result.banks?.mercury?.USD || 0).toFixed(2)}\n`;
-    message += `• Mercury EUR: €${(result.banks?.mercury?.EUR || 0).toFixed(2)}\n`;
-    message += `• Revolut USD: $${(result.banks?.revolut?.USD || 0).toFixed(2)}\n`;
-    message += `• Revolut EUR: €${(result.banks?.revolut?.EUR || 0).toFixed(2)}\n\n`;
+    message += '🏦 BANK BREAKDOWN:\n';
+    message += '• Mercury USD: $' + (result.banks && result.banks.mercury && result.banks.mercury.USD ? result.banks.mercury.USD : 0).toFixed(2) + '\n';
+    message += '• Mercury EUR: €' + (result.banks && result.banks.mercury && result.banks.mercury.EUR ? result.banks.mercury.EUR : 0).toFixed(2) + '\n';
+    message += '• Revolut USD: $' + (result.banks && result.banks.revolut && result.banks.revolut.USD ? result.banks.revolut.USD : 0).toFixed(2) + '\n';
+    message += '• Revolut EUR: €' + (result.banks && result.banks.revolut && result.banks.revolut.EUR ? result.banks.revolut.EUR : 0).toFixed(2) + '\n\n';
     
-    message += `🛡️ HEALTH STATUS:\n`;
-    message += `• Mercury Healthy: ${result.health?.mercuryOK ? '✅ Yes' : '❌ No'}\n`;
-    message += `• Revolut Healthy: ${result.health?.revolutOK ? '✅ Yes' : '❌ No'}\n`;
-    message += `• All Banks Healthy: ${result.health?.allHealthy ? '✅ Yes' : '❌ No'}\n\n`;
+    message += '🛡️ HEALTH STATUS:\n';
+    message += '• Mercury Healthy: ' + ((result.health ? result.health.mercuryOK : 0) ? '✅ Yes' : '❌ No') + '\n';
+    message += '• Revolut Healthy: ' + ((result.health ? result.health.revolutOK : 0) ? '✅ Yes' : '❌ No') + '\n';
+    message += '• All Banks Healthy: ' + ((result.health ? result.health.allHealthy : 0) ? '✅ Yes' : '❌ No') + '\n\n';
     
-    message += `⏰ Generated: ${new Date().toLocaleString()}`;
+    message += '⏰ Generated: ' + new Date().toLocaleString();
     
     ui.alert(title, message, ui.ButtonSet.OK);
     
@@ -4586,29 +5219,39 @@ function displaySummaryResult(title, result) {
       Logger.log('[ERROR] Sheet not found for display');
       return;
     }
-    
+
+    function numberOrZero(value) {
+      var num = Number(value);
+      return isNaN(num) ? 0 : num;
+    }
+
+    var timestamp = (result && result.timestamp) ? result.timestamp : new Date().toLocaleString();
+    var totals = (result && result.totals) ? result.totals : {};
+    var banks = (result && result.banks) ? result.banks : {};
+    var health = (result && result.health) ? result.health : {};
+
+    var mercury = banks.mercury || {};
+    var revolut = banks.revolut || {};
+
     var output = [];
-    output.push([`📊 ${title}`, result.timestamp || new Date().toLocaleString()]);
-    output.push(['', '']);
-    
-    output.push(['💵 TOTAL USD BALANCE', '$' + (result.totals?.totalUSD || 0).toFixed(2)]);
-    output.push(['💶 TOTAL EUR BALANCE', '€' + (result.totals?.totalEUR || 0).toFixed(2)]);
-    output.push(['', '']);
-    
-    output.push(['🏦 BANK BREAKDOWN:', '']);
-    output.push(['Mercury USD', '$' + (result.banks?.mercury?.USD || 0).toFixed(2)]);
-    output.push(['Mercury EUR', '€' + (result.banks?.mercury?.EUR || 0).toFixed(2)]);
-    output.push(['Revolut USD', '$' + (result.banks?.revolut?.USD || 0).toFixed(2)]);
-    output.push(['Revolut EUR', '€' + (result.banks?.revolut?.EUR || 0).toFixed(2)]);
-    output.push(['', '']);
-    
-    output.push(['🛡️ HEALTH STATUS:', '']);
-    output.push(['Mercury Healthy', result.health?.mercuryOK ? '✅ Yes' : '❌ No']);
-    output.push(['Revolut Healthy', result.health?.revolutOK ? '✅ Yes' : '❌ No']);
-    output.push(['All Banks Healthy', result.health?.allHealthy ? '✅ Yes' : '❌ No']);
-    
+    output.push(['📊 ' + title, timestamp]);
+    output.push([, ]);
+    output.push(['💵 TOTAL USD BALANCE', '$' + numberOrZero(totals.totalUSD).toFixed(2)]);
+    output.push(['💶 TOTAL EUR BALANCE', '€' + numberOrZero(totals.totalEUR).toFixed(2)]);
+    output.push([, ]);
+    output.push(['🏦 BANK BREAKDOWN:', ]);
+    output.push(['Mercury USD', '$' + numberOrZero(mercury.USD).toFixed(2)]);
+    output.push(['Mercury EUR', '€' + numberOrZero(mercury.EUR).toFixed(2)]);
+    output.push(['Revolut USD', '$' + numberOrZero(revolut.USD).toFixed(2)]);
+    output.push(['Revolut EUR', '€' + numberOrZero(revolut.EUR).toFixed(2)]);
+    output.push([, ]);
+    output.push(['🛡️ HEALTH STATUS:', ]);
+    output.push(['Mercury Healthy', health.mercuryOK ? '✅ Yes' : '❌ No']);
+    output.push(['Revolut Healthy', health.revolutOK ? '✅ Yes' : '❌ No']);
+    output.push(['All Banks Healthy', health.allHealthy ? '✅ Yes' : '❌ No']);
+
     sh.getRange('A10:B' + (10 + output.length - 1)).setValues(output);
-    
+
   } catch (e) {
     Logger.log('[ERROR] Display summary result failed: %s', e.message);
   }
