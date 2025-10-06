@@ -2197,6 +2197,23 @@ function consolidateRevolutUsdFunds_(dryRun) {
       if (usdBalance > 0) {
         result.foundTotal += usdBalance;
         
+        // DETECT PAYOUT: Non-Main USD account with balance indicates a payout
+        Logger.log('[REVOLUT_PAYOUT] Detected payout: $%s USD on %s (non-Main account)', usdBalance, accountName);
+        
+        // Attempt payout reconciliation with Payouts sheet
+        try {
+          var reconciliationResult = reconcilePayoutWithSpreadsheet(usdBalance, 'Revolut');
+          if (reconciliationResult.success) {
+            Logger.log('[REVOLUT_PAYOUT] ✅ Payout reconciled: %s', reconciliationResult.message);
+            result.payoutsReconciled = (result.payoutsReconciled || 0) + 1;
+          } else {
+            Logger.log('[REVOLUT_PAYOUT] ⚠️ Payout not reconciled: %s', reconciliationResult.error || 'No match found');
+            result.payoutsUnreconciled = (result.payoutsUnreconciled || 0) + 1;
+          }
+        } catch (e) {
+          Logger.log('[ERROR] Payout reconciliation failed for $%s: %s', usdBalance, e.message);
+        }
+        
         var transfer = {
           bank: 'Revolut',
           fromAccount: accountName,
@@ -2309,6 +2326,23 @@ function consolidateMercuryUsdFunds_(dryRun) {
         
         if (usdBalance > 0) {
           result.foundTotal += usdBalance;
+          
+          // DETECT PAYOUT: Non-Main USD account with balance indicates a payout
+          Logger.log('[MERCURY_PAYOUT] Detected payout: $%s USD on %s (non-Main account)', usdBalance, accountName);
+          
+          // Attempt payout reconciliation with Payouts sheet
+          try {
+            var reconciliationResult = reconcilePayoutWithSpreadsheet(usdBalance, 'Mercury');
+            if (reconciliationResult.success) {
+              Logger.log('[MERCURY_PAYOUT] ✅ Payout reconciled: %s', reconciliationResult.message);
+              result.payoutsReconciled = (result.payoutsReconciled || 0) + 1;
+            } else {
+              Logger.log('[MERCURY_PAYOUT] ⚠️ Payout not reconciled: %s', reconciliationResult.error || 'No match found');
+              result.payoutsUnreconciled = (result.payoutsUnreconciled || 0) + 1;
+            }
+          } catch (e) {
+            Logger.log('[ERROR] Payout reconciliation failed for $%s: %s', usdBalance, e.message);
+          }
           
           var transfer = {
             bank: 'Mercury',
