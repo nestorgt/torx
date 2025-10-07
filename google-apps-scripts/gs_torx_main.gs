@@ -4421,6 +4421,159 @@ function TRIGGER_updateAllBalances() {
   }
 }
 
+/* ============== Unified Bank Data Sync Trigger Functions ============== */
+function TRIGGER_syncBanksDataFull() {
+  Logger.log('=== AUTOMATIC UNIFIED BANK DATA SYNC TRIGGER ===');
+  Logger.log('[SYNC_TRIGGER] Starting automatic unified bank data sync');
+  
+  try {
+    // Run the unified sync with full options
+    var result = syncBanksData({
+      dryRun: false,
+      skipExpenses: false,
+      skipConsolidation: false,
+      skipPayoutReconciliation: false
+    });
+    
+    if (result.status === 'success') {
+      Logger.log('[SYNC_TRIGGER] Unified sync completed successfully');
+      Logger.log('[SYNC_TRIGGER] Duration: %s ms', result.duration);
+      Logger.log('[SYNC_TRIGGER] Balances updated: %s', result.summary.totalBalancesUpdated);
+      Logger.log('[SYNC_TRIGGER] Transfers detected: %s', result.summary.totalPayoutsDetected);
+      Logger.log('[SYNC_TRIGGER] Transfers reconciled: %s', result.summary.totalPayoutsReconciled);
+      Logger.log('[SYNC_TRIGGER] Funds consolidated: $%s', result.summary.totalFundsConsolidated);
+      Logger.log('[SYNC_TRIGGER] Expenses calculated: %s', result.summary.totalExpensesCalculated);
+      
+      return {
+        success: true,
+        timestamp: new Date().toISOString(),
+        duration: result.duration,
+        summary: result.summary,
+        message: 'Automatic unified bank data sync completed successfully'
+      };
+    } else {
+      Logger.log('[SYNC_TRIGGER] Unified sync failed: %s', result.error);
+      return {
+        success: false,
+        timestamp: new Date().toISOString(),
+        error: result.error,
+        message: 'Automatic unified bank data sync failed'
+      };
+    }
+    
+  } catch (e) {
+    Logger.log('[ERROR] Unified sync trigger failed: %s', e.message);
+    Logger.log('[ERROR] Stack trace: %s', e.stack);
+    
+    return {
+      success: false,
+      timestamp: new Date().toISOString(),
+      error: e.message,
+      message: 'Unified sync trigger execution failed'
+    };
+  }
+}
+
+function TRIGGER_syncBanksDataBalancesOnly() {
+  Logger.log('=== AUTOMATIC BALANCE SYNC TRIGGER ===');
+  Logger.log('[SYNC_TRIGGER] Starting automatic balance-only sync');
+  
+  try {
+    // Run the unified sync with only balance updates
+    var result = syncBanksData({
+      dryRun: false,
+      skipExpenses: true,
+      skipConsolidation: true,
+      skipPayoutReconciliation: true
+    });
+    
+    if (result.status === 'success') {
+      Logger.log('[SYNC_TRIGGER] Balance sync completed successfully');
+      Logger.log('[SYNC_TRIGGER] Duration: %s ms', result.duration);
+      Logger.log('[SYNC_TRIGGER] Balances updated: %s', result.summary.totalBalancesUpdated);
+      
+      return {
+        success: true,
+        timestamp: new Date().toISOString(),
+        duration: result.duration,
+        summary: result.summary,
+        message: 'Automatic balance sync completed successfully'
+      };
+    } else {
+      Logger.log('[SYNC_TRIGGER] Balance sync failed: %s', result.error);
+      return {
+        success: false,
+        timestamp: new Date().toISOString(),
+        error: result.error,
+        message: 'Automatic balance sync failed'
+      };
+    }
+    
+  } catch (e) {
+    Logger.log('[ERROR] Balance sync trigger failed: %s', e.message);
+    Logger.log('[ERROR] Stack trace: %s', e.stack);
+    
+    return {
+      success: false,
+      timestamp: new Date().toISOString(),
+      error: e.message,
+      message: 'Balance sync trigger execution failed'
+    };
+  }
+}
+
+function TRIGGER_syncBanksDataWithTransfers() {
+  Logger.log('=== AUTOMATIC TRANSFER SYNC TRIGGER ===');
+  Logger.log('[SYNC_TRIGGER] Starting automatic sync with transfer detection');
+  
+  try {
+    // Run the unified sync with balance updates and transfer detection
+    var result = syncBanksData({
+      dryRun: false,
+      skipExpenses: false,
+      skipConsolidation: false,
+      skipPayoutReconciliation: false
+    });
+    
+    if (result.status === 'success') {
+      Logger.log('[SYNC_TRIGGER] Transfer sync completed successfully');
+      Logger.log('[SYNC_TRIGGER] Duration: %s ms', result.duration);
+      Logger.log('[SYNC_TRIGGER] Balances updated: %s', result.summary.totalBalancesUpdated);
+      Logger.log('[SYNC_TRIGGER] Transfers detected: %s', result.summary.totalPayoutsDetected);
+      Logger.log('[SYNC_TRIGGER] Transfers reconciled: %s', result.summary.totalPayoutsReconciled);
+      Logger.log('[SYNC_TRIGGER] Funds consolidated: $%s', result.summary.totalFundsConsolidated);
+      Logger.log('[SYNC_TRIGGER] Expenses calculated: %s', result.summary.totalExpensesCalculated);
+      
+      return {
+        success: true,
+        timestamp: new Date().toISOString(),
+        duration: result.duration,
+        summary: result.summary,
+        message: 'Automatic transfer sync completed successfully'
+      };
+    } else {
+      Logger.log('[SYNC_TRIGGER] Transfer sync failed: %s', result.error);
+      return {
+        success: false,
+        timestamp: new Date().toISOString(),
+        error: result.error,
+        message: 'Automatic transfer sync failed'
+      };
+    }
+    
+  } catch (e) {
+    Logger.log('[ERROR] Transfer sync trigger failed: %s', e.message);
+    Logger.log('[ERROR] Stack trace: %s', e.stack);
+    
+    return {
+      success: false,
+      timestamp: new Date().toISOString(),
+      error: e.message,
+      message: 'Transfer sync trigger execution failed'
+    };
+  }
+}
+
 function TRIGGER_checkBankMinimumBalances() {
   Logger.log('=== AUTOMATIC BANK MINIMUM BALANCE CHECK TRIGGER ===');
   Logger.log('[MIN_BALANCE_TRIGGER] Starting automatic minimum balance check');
