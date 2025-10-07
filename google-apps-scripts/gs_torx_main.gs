@@ -5248,7 +5248,7 @@ function reconcileTransferWithSpreadsheet(receivedAmount, bankName, accountName)
     // Debug: Show first few entries to understand the data structure
     for (var d = 0; d < Math.min(5, payoutData.length); d++) {
       var debugRow = payoutData[d];
-      Logger.log('[TRANSFER_RECONCILE] DEBUG Row ' + (d + 23) + ': User="' + debugRow[0] + '", Platform="' + debugRow[1] + '", Amount=' + debugRow[5] + ', Received="' + debugRow[7] + '"');
+      Logger.log('[TRANSFER_RECONCILE] DEBUG Row ' + (d + 23) + ': User="' + debugRow[0] + '", Platform="' + debugRow[1] + '", Amount=' + debugRow[6] + ', Received="' + debugRow[7] + '"');
       // Debug all columns to find the correct amount column
       Logger.log('[TRANSFER_RECONCILE] DEBUG All columns: A="' + debugRow[0] + '", B="' + debugRow[1] + '", C="' + debugRow[2] + '", D="' + debugRow[3] + '", E="' + debugRow[4] + '", F="' + debugRow[5] + '", G="' + debugRow[6] + '", H="' + debugRow[7] + '"');
     }
@@ -5259,7 +5259,7 @@ function reconcileTransferWithSpreadsheet(receivedAmount, bankName, accountName)
     for (var i = 0; i < payoutData.length; i++) {
       var row = payoutData[i];
       var platform = String(row[1] || '').trim(); // Column B (Platform)
-      var baseAmount = Number(row[5] || 0); // Column G (Amount)
+      var baseAmount = Number(row[6] || 0); // Column G (Amount)
       var received = String(row[7] || '').trim().toLowerCase(); // Column H (Received)
       
       // Skip if already marked as received
@@ -5365,7 +5365,7 @@ function reconcilePayoutWithSpreadsheet(receivedAmount, bankName) {
     for (var i = 0; i < payoutData.length; i++) {
       var row = payoutData[i];
       var platform = String(row[1] || '').trim(); // Column B (Platform)
-      var baseAmount = Number(row[5] || 0); // Column G (Amount)
+      var baseAmount = Number(row[6] || 0); // Column G (Amount)
       var received = String(row[7] || '').trim().toLowerCase(); // Column H (Received)
       
       // Skip if already marked as received
