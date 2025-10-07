@@ -5223,6 +5223,12 @@ function reconcileTransferWithSpreadsheet(receivedAmount, bankName, accountName)
     var payoutData = sheet.getRange(23, 1, lastRow - 22, 8).getValues();
     Logger.log('[TRANSFER_RECONCILE] Checking ' + payoutData.length + ' payout entries...');
     
+    // Debug: Show first few entries to understand the data structure
+    for (var d = 0; d < Math.min(5, payoutData.length); d++) {
+      var debugRow = payoutData[d];
+      Logger.log('[TRANSFER_RECONCILE] DEBUG Row ' + (d + 23) + ': User="' + debugRow[0] + '", Platform="' + debugRow[1] + '", Amount=' + debugRow[5] + ', Received="' + debugRow[7] + '"');
+    }
+    
     var bestMatch = { row: -1, score: 0, adjustment: 0 };
     
     // Look for unmatched payouts that could match this received amount
@@ -5245,10 +5251,13 @@ function reconcileTransferWithSpreadsheet(receivedAmount, bankName, accountName)
       // Calculate expected amount based on platform
       var expectedCalc = calculateExpectedPayoutAmount_(platform, baseAmount);
       
+      // Debug logging for troubleshooting
+      Logger.log('[TRANSFER_RECONCILE] Row ' + (i + 23) + ': Platform="' + platform + '", Base=$' + baseAmount + ', Expected=$' + expectedCalc.expected + ', Range=$' + expectedCalc.min + '-$' + expectedCalc.max + ', Received=$' + receivedAmount);
+      
       // Check if received amount matches expected range
       if (receivedAmount >= expectedCalc.min && receivedAmount <= expectedCalc.max) {
         var score = 1 - Math.abs(receivedAmount - expectedCalc.expected) / expectedCalc.expected;
-        Logger.log('[TRANSFER_RECONCILE] Row ' + (i + 23) + ': Platform=' + platform + ', Base=$' + baseAmount + ', Expected=' + expectedCalc.expected + ', Score=' + score.toFixed(3));
+        Logger.log('[TRANSFER_RECONCILE] ✅ MATCH: Row ' + (i + 23) + ': Platform=' + platform + ', Base=$' + baseAmount + ', Expected=' + expectedCalc.expected + ', Score=' + score.toFixed(3));
         
         if (score > bestMatch.score) {
           bestMatch = { 
