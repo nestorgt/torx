@@ -623,7 +623,7 @@ function revolutTransferBetweenAccounts_(fromName, toName, currency, amount, ref
   Logger.log('[REVOLUT] Transfer request: %s -> %s, %s %s, "%s"', fromName, toName, amount, currency, reference);
   
   var body = {
-    to: toName,
+    toName: toName,
     amount: amount,
     currency: currency,
     reference: reference || 'Transfer from ' + fromName,
