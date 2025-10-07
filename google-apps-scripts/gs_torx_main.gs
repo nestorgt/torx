@@ -5440,6 +5440,16 @@ function calculateExpectedPayoutAmount_(platformName, baseAmount) {
       max: Math.max(expected * 1.05, baseAmount * 0.85),    // Allow up to 85% of base
       platform: 'MFFU'
     };
+  } else if (platformName && platformName.toLowerCase().includes('tradeify')) {
+    // Tradeify: ~90% of base amount minus $20 transfer fee
+    var expected90 = baseAmount * 0.9 - 20;
+    var expected = Math.max(expected90, baseAmount * 0.85);
+    return {
+      expected: expected,
+      min: Math.min(expected90 * 0.95, baseAmount * 0.80),  // Allow wider range
+      max: Math.max(expected * 1.05, baseAmount * 0.95),     // Allow up to 95% of base
+      platform: 'Tradeify'
+    };
   } else {
     // Default: assume close to base amount
     var expected = baseAmount * 0.95; // Assume 5% less
