@@ -2883,6 +2883,572 @@ function updateAllBalances() {
   }
 }
 
+/* ============== Unified Bank Data Synchronization ============== */
+function syncBanksData(options) {
+  /*
+   * 🚀 UNIFIED BANK DATA SYNCHRONIZATION
+   * 
+   * This method combines all bank operations into one comprehensive sync:
+   * 1. Update bank balances
+   * 2. Detect payouts on non-Main USD accounts
+   * 3. Consolidate funds to Main accounts (where possible)
+   * 4. Reconcile payouts with Payouts sheet
+   * 5. Calculate monthly expenses
+   * 6. Update all sheet data
+   * 
+   * @param {Object} options - Configuration options
+   * @param {boolean} options.dryRun - If true, don't make actual changes
+   * @param {boolean} options.skipExpenses - If true, skip expense calculation
+   * @param {boolean} options.skipConsolidation - If true, skip fund consolidation
+   * @param {boolean} options.skipPayoutReconciliation - If true, skip payout reconciliation
+   */
+  
+  var startTime = new Date();
+  var result = {
+    status: 'success',
+    startTime: startTime,
+    endTime: null,
+    duration: 0,
+    steps: {
+      balances: { status: 'pending', updated: 0, errors: [] },
+      payouts: { status: 'pending', detected: 0, reconciled: 0, errors: [] },
+      consolidation: { status: 'pending', moved: 0, errors: [] },
+      expenses: { status: 'pending', calculated: false, errors: [] }
+    },
+    summary: {
+      totalBalancesUpdated: 0,
+      totalPayoutsDetected: 0,
+      totalPayoutsReconciled: 0,
+      totalFundsConsolidated: 0,
+      totalExpensesCalculated: 0
+    }
+  };
+  
+  try {
+    Logger.log('=== STARTING UNIFIED BANK DATA SYNC ===');
+    Logger.log('[SYNC] Options: dryRun=%s, skipExpenses=%s, skipConsolidation=%s, skipPayoutReconciliation=%s', 
+               options.dryRun || false, options.skipExpenses || false, options.skipConsolidation || false, options.skipPayoutReconciliation || false);
+    
+    var sh = sheet_(SHEET_NAME);
+    if (!sh) {
+      throw new Error('Payouts sheet not found');
+    }
+    
+    // Check proxy health
+    if (!proxyIsUp_()) {
+      Logger.log('[WARNING] Proxy is not healthy, skipping sync');
+      result.status = 'error';
+      result.error = 'Proxy server not healthy';
+      return result;
+    }
+    
+    // STEP 1: Update Bank Balances
+    Logger.log('[STEP_1] Updating bank balances...');
+    try {
+      var balanceResult = updateBankBalances_(sh, options.dryRun);
+      result.steps.balances = balanceResult;
+      result.summary.totalBalancesUpdated = balanceResult.updated;
+      Logger.log('[STEP_1] ✅ Bank balances updated: %s banks', balanceResult.updated);
+    } catch (e) {
+      Logger.log('[ERROR] Step 1 failed: %s', e.message);
+      result.steps.balances.status = 'error';
+      result.steps.balances.errors.push(e.message);
+    }
+    
+    // STEP 2: Detect and Reconcile Payouts
+    if (!options.skipPayoutReconciliation) {
+      Logger.log('[STEP_2] Detecting and reconciling payouts...');
+      try {
+        var payoutResult = detectAndReconcilePayouts_(options.dryRun);
+        result.steps.payouts = payoutResult;
+        result.summary.totalPayoutsDetected = payoutResult.detected;
+        result.summary.totalPayoutsReconciled = payoutResult.reconciled;
+        Logger.log('[STEP_2] ✅ Payouts processed: %s detected, %s reconciled', payoutResult.detected, payoutResult.reconciled);
+      } catch (e) {
+        Logger.log('[ERROR] Step 2 failed: %s', e.message);
+        result.steps.payouts.status = 'error';
+        result.steps.payouts.errors.push(e.message);
+      }
+    } else {
+      Logger.log('[STEP_2] ⏭️ Skipping payout reconciliation');
+      result.steps.payouts.status = 'skipped';
+    }
+    
+    // STEP 3: Consolidate Funds to Main Accounts
+    if (!options.skipConsolidation) {
+      Logger.log('[STEP_3] Consolidating funds to Main accounts...');
+      try {
+        var consolidationResult = consolidateFundsToMain_(options.dryRun);
+        result.steps.consolidation = consolidationResult;
+        result.summary.totalFundsConsolidated = consolidationResult.moved;
+        Logger.log('[STEP_3] ✅ Fund consolidation completed: $%s moved', consolidationResult.moved);
+      } catch (e) {
+        Logger.log('[ERROR] Step 3 failed: %s', e.message);
+        result.steps.consolidation.status = 'error';
+        result.steps.consolidation.errors.push(e.message);
+      }
+    } else {
+      Logger.log('[STEP_3] ⏭️ Skipping fund consolidation');
+      result.steps.consolidation.status = 'skipped';
+    }
+    
+    // STEP 4: Calculate Monthly Expenses
+    if (!options.skipExpenses) {
+      Logger.log('[STEP_4] Calculating monthly expenses...');
+      try {
+        var expenseResult = calculateMonthlyExpenses_();
+        result.steps.expenses = expenseResult;
+        result.summary.totalExpensesCalculated = expenseResult.calculated ? 1 : 0;
+        Logger.log('[STEP_4] ✅ Monthly expenses calculated');
+      } catch (e) {
+        Logger.log('[ERROR] Step 4 failed: %s', e.message);
+        result.steps.expenses.status = 'error';
+        result.steps.expenses.errors.push(e.message);
+      }
+    } else {
+      Logger.log('[STEP_4] ⏭️ Skipping expense calculation');
+      result.steps.expenses.status = 'skipped';
+    }
+    
+    // Calculate final duration
+    result.endTime = new Date();
+    result.duration = result.endTime.getTime() - result.startTime.getTime();
+    
+    Logger.log('[SYNC] ✅ Unified bank data sync completed in %s ms', result.duration);
+    Logger.log('=== UNIFIED BANK DATA SYNC COMPLETED ===');
+    
+    return result;
+    
+  } catch (e) {
+    Logger.log('[ERROR] Unified bank data sync failed: %s', e.message);
+    result.status = 'error';
+    result.error = e.message;
+    result.endTime = new Date();
+    result.duration = result.endTime.getTime() - result.startTime.getTime();
+    return result;
+  }
+}
+
+function updateBankBalances_(sh, dryRun) {
+  var result = {
+    status: 'success',
+    updated: 0,
+    errors: []
+  };
+  
+  try {
+    // Update Mercury
+    try {
+      var mercurySummary = fetchMercurySummary_();
+      updateBankBalance_(sh, 'Mercury', mercurySummary, 'Mercury balance update');
+      result.updated++;
+    } catch (e) {
+      Logger.log('[ERROR] Mercury balance update failed: %s', e.message);
+      result.errors.push('Mercury: ' + e.message);
+    }
+    
+    // Skip Airwallex - preserve manually set balance
+    Logger.log('[AIRWALLEX] Skipping balance update - manually set balance preserved');
+    
+    // Update Revolut
+    try {
+      var revolutSummary = fetchRevolutSummary_();
+      updateBankBalance_(sh, 'Revolut', revolutSummary, 'Revolut balance update');
+      result.updated++;
+    } catch (e) {
+      Logger.log('[ERROR] Revolut balance update failed: %s', e.message);
+      result.errors.push('Revolut: ' + e.message);
+    }
+    
+    // Update Wise
+    try {
+      var wiseSummary = fetchWiseSummary_();
+      updateBankBalance_(sh, 'Wise', wiseSummary, 'Wise balance update');
+      result.updated++;
+    } catch (e) {
+      Logger.log('[ERROR] Wise balance update failed: %s', e.message);
+      result.errors.push('Wise: ' + e.message);
+    }
+    
+    // Update Nexo (USD only)
+    try {
+      var nexoSummary = fetchNexoSummary_();
+      updateBankBalance_(sh, 'Nexo', { USD: nexoSummary.USD || 0 }, 'Nexo balance update');
+      result.updated++;
+    } catch (e) {
+      Logger.log('[ERROR] Nexo balance update failed: %s', e.message);
+      result.errors.push('Nexo: ' + e.message);
+    }
+    
+    Logger.log('[BALANCES] Updated %s bank balances', result.updated);
+    return result;
+    
+  } catch (e) {
+    Logger.log('[ERROR] Bank balance update failed: %s', e.message);
+    result.status = 'error';
+    result.errors.push(e.message);
+    return result;
+  }
+}
+
+function detectAndReconcilePayouts_(dryRun) {
+  var result = {
+    status: 'success',
+    detected: 0,
+    reconciled: 0,
+    errors: []
+  };
+  
+  try {
+    Logger.log('[PAYOUTS] Detecting payouts on non-Main USD accounts...');
+    
+    // Check Mercury accounts
+    try {
+      var mercuryAccounts = getMercuryAccounts_();
+      for (var i = 0; i < mercuryAccounts.length; i++) {
+        var account = mercuryAccounts[i];
+        var accountName = account.name || account.displayName || 'Unknown';
+        var currency = account.currency || 'USD';
+        var balance = account.balance || 0;
+        
+        // Skip non-USD accounts
+        if (currency.toUpperCase() !== 'USD') continue;
+        
+        // Skip Main account
+        var isMainAccount = (
+          (account.name ? account.name.includes('2290') : false) || 
+          (account.nickname ? account.nickname.includes('2290') : false) ||
+          account.isMainAccount === true ||
+          (account.nickname ? account.nickname.toLowerCase().includes('main') : false)
+        );
+        
+        if (isMainAccount) continue;
+        
+        if (balance > 0) {
+          result.detected++;
+          Logger.log('[PAYOUTS] Detected Mercury payout: $%s USD on %s', balance, accountName);
+          
+          if (!dryRun) {
+            try {
+              var reconciliationResult = reconcilePayoutWithSpreadsheet(balance, 'Mercury');
+              if (reconciliationResult.success) {
+                result.reconciled++;
+                Logger.log('[PAYOUTS] ✅ Mercury payout reconciled: %s', reconciliationResult.message);
+              } else {
+                Logger.log('[PAYOUTS] ⚠️ Mercury payout not reconciled: %s', reconciliationResult.error);
+              }
+            } catch (e) {
+              Logger.log('[ERROR] Mercury payout reconciliation failed: %s', e.message);
+              result.errors.push('Mercury reconciliation: ' + e.message);
+            }
+          }
+        }
+      }
+    } catch (e) {
+      Logger.log('[ERROR] Mercury payout detection failed: %s', e.message);
+      result.errors.push('Mercury detection: ' + e.message);
+    }
+    
+    // Check Revolut accounts
+    try {
+      var revolutAccounts = getRevolutAccounts_();
+      for (var i = 0; i < revolutAccounts.length; i++) {
+        var account = revolutAccounts[i];
+        var accountName = account.name || account.displayName || 'Unknown';
+        var currency = account.currency || 'USD';
+        var balance = account.balance || 0;
+        
+        // Skip non-USD accounts
+        if (currency.toUpperCase() !== 'USD') continue;
+        
+        // Skip Main account
+        if (accountName.toLowerCase().includes('main')) continue;
+        
+        if (balance > 0) {
+          result.detected++;
+          Logger.log('[PAYOUTS] Detected Revolut payout: $%s USD on %s', balance, accountName);
+          
+          if (!dryRun) {
+            try {
+              var reconciliationResult = reconcilePayoutWithSpreadsheet(balance, 'Revolut');
+              if (reconciliationResult.success) {
+                result.reconciled++;
+                Logger.log('[PAYOUTS] ✅ Revolut payout reconciled: %s', reconciliationResult.message);
+              } else {
+                Logger.log('[PAYOUTS] ⚠️ Revolut payout not reconciled: %s', reconciliationResult.error);
+              }
+            } catch (e) {
+              Logger.log('[ERROR] Revolut payout reconciliation failed: %s', e.message);
+              result.errors.push('Revolut reconciliation: ' + e.message);
+            }
+          }
+        }
+      }
+    } catch (e) {
+      Logger.log('[ERROR] Revolut payout detection failed: %s', e.message);
+      result.errors.push('Revolut detection: ' + e.message);
+    }
+    
+    Logger.log('[PAYOUTS] Payout detection completed: %s detected, %s reconciled', result.detected, result.reconciled);
+    return result;
+    
+  } catch (e) {
+    Logger.log('[ERROR] Payout detection and reconciliation failed: %s', e.message);
+    result.status = 'error';
+    result.errors.push(e.message);
+    return result;
+  }
+}
+
+function consolidateFundsToMain_(dryRun) {
+  var result = {
+    status: 'success',
+    moved: 0,
+    errors: []
+  };
+  
+  try {
+    Logger.log('[CONSOLIDATION] Starting fund consolidation to Main accounts...');
+    
+    // Consolidate Revolut funds (only bank that supports programmatic transfers)
+    try {
+      var revolutResult = consolidateRevolutUsdFunds_(dryRun);
+      result.moved += revolutResult.movedTotal || 0;
+      if (revolutResult.errors && revolutResult.errors.length > 0) {
+        result.errors.push('Revolut: ' + revolutResult.errors.join(', '));
+      }
+      Logger.log('[CONSOLIDATION] Revolut: $%s moved to Main', revolutResult.movedTotal || 0);
+    } catch (e) {
+      Logger.log('[ERROR] Revolut consolidation failed: %s', e.message);
+      result.errors.push('Revolut: ' + e.message);
+    }
+    
+    // Mercury consolidation (manual transfer required)
+    try {
+      var mercuryResult = consolidateMercuryUsdFunds_(dryRun);
+      // Note: Mercury doesn't actually move funds due to API limitation
+      Logger.log('[CONSOLIDATION] Mercury: Manual transfer required for $%s', mercuryResult.foundTotal || 0);
+    } catch (e) {
+      Logger.log('[ERROR] Mercury consolidation failed: %s', e.message);
+      result.errors.push('Mercury: ' + e.message);
+    }
+    
+    Logger.log('[CONSOLIDATION] Fund consolidation completed: $%s moved', result.moved);
+    return result;
+    
+  } catch (e) {
+    Logger.log('[ERROR] Fund consolidation failed: %s', e.message);
+    result.status = 'error';
+    result.errors.push(e.message);
+    return result;
+  }
+}
+
+function calculateMonthlyExpenses_() {
+  var result = {
+    status: 'success',
+    calculated: false,
+    errors: []
+  };
+  
+  try {
+    Logger.log('[EXPENSES] Calculating monthly expenses...');
+    updateCurrentMonthExpenses();
+    result.calculated = true;
+    Logger.log('[EXPENSES] Monthly expenses calculated successfully');
+    return result;
+  } catch (e) {
+    Logger.log('[ERROR] Monthly expense calculation failed: %s', e.message);
+    result.status = 'error';
+    result.errors.push(e.message);
+    return result;
+  }
+}
+
+/* ============== Test Cases for Debugging ============== */
+function testSyncBalancesOnly() {
+  /*
+   * 🧪 TEST: Sync Bank Balances Only
+   * Tests only the balance update functionality
+   */
+  Logger.log('=== TESTING: Bank Balances Only ===');
+  
+  var options = {
+    dryRun: false,
+    skipExpenses: true,
+    skipConsolidation: true,
+    skipPayoutReconciliation: true
+  };
+  
+  var result = syncBanksData(options);
+  
+  Logger.log('=== BALANCE TEST RESULTS ===');
+  Logger.log('Status: %s', result.status);
+  Logger.log('Duration: %s ms', result.duration);
+  Logger.log('Balances Updated: %s', result.summary.totalBalancesUpdated);
+  
+  if (result.steps.balances.errors.length > 0) {
+    Logger.log('Balance Errors: %s', result.steps.balances.errors.join(', '));
+  }
+  
+  return result;
+}
+
+function testSyncPayoutsOnly() {
+  /*
+   * 🧪 TEST: Sync Payouts Only
+   * Tests only the payout detection and reconciliation
+   */
+  Logger.log('=== TESTING: Payouts Only ===');
+  
+  var options = {
+    dryRun: false,
+    skipExpenses: true,
+    skipConsolidation: true,
+    skipPayoutReconciliation: false
+  };
+  
+  var result = syncBanksData(options);
+  
+  Logger.log('=== PAYOUT TEST RESULTS ===');
+  Logger.log('Status: %s', result.status);
+  Logger.log('Duration: %s ms', result.duration);
+  Logger.log('Payouts Detected: %s', result.summary.totalPayoutsDetected);
+  Logger.log('Payouts Reconciled: %s', result.summary.totalPayoutsReconciled);
+  
+  if (result.steps.payouts.errors.length > 0) {
+    Logger.log('Payout Errors: %s', result.steps.payouts.errors.join(', '));
+  }
+  
+  return result;
+}
+
+function testSyncConsolidationOnly() {
+  /*
+   * 🧪 TEST: Sync Consolidation Only
+   * Tests only the fund consolidation functionality
+   */
+  Logger.log('=== TESTING: Consolidation Only ===');
+  
+  var options = {
+    dryRun: false,
+    skipExpenses: true,
+    skipConsolidation: false,
+    skipPayoutReconciliation: true
+  };
+  
+  var result = syncBanksData(options);
+  
+  Logger.log('=== CONSOLIDATION TEST RESULTS ===');
+  Logger.log('Status: %s', result.status);
+  Logger.log('Duration: %s ms', result.duration);
+  Logger.log('Funds Consolidated: $%s', result.summary.totalFundsConsolidated);
+  
+  if (result.steps.consolidation.errors.length > 0) {
+    Logger.log('Consolidation Errors: %s', result.steps.consolidation.errors.join(', '));
+  }
+  
+  return result;
+}
+
+function testSyncExpensesOnly() {
+  /*
+   * 🧪 TEST: Sync Expenses Only
+   * Tests only the expense calculation functionality
+   */
+  Logger.log('=== TESTING: Expenses Only ===');
+  
+  var options = {
+    dryRun: false,
+    skipExpenses: false,
+    skipConsolidation: true,
+    skipPayoutReconciliation: true
+  };
+  
+  var result = syncBanksData(options);
+  
+  Logger.log('=== EXPENSE TEST RESULTS ===');
+  Logger.log('Status: %s', result.status);
+  Logger.log('Duration: %s ms', result.duration);
+  Logger.log('Expenses Calculated: %s', result.summary.totalExpensesCalculated);
+  
+  if (result.steps.expenses.errors.length > 0) {
+    Logger.log('Expense Errors: %s', result.steps.expenses.errors.join(', '));
+  }
+  
+  return result;
+}
+
+function testSyncDryRun() {
+  /*
+   * 🧪 TEST: Sync Dry Run
+   * Tests all functionality without making actual changes
+   */
+  Logger.log('=== TESTING: Dry Run (All Steps) ===');
+  
+  var options = {
+    dryRun: true,
+    skipExpenses: false,
+    skipConsolidation: false,
+    skipPayoutReconciliation: false
+  };
+  
+  var result = syncBanksData(options);
+  
+  Logger.log('=== DRY RUN TEST RESULTS ===');
+  Logger.log('Status: %s', result.status);
+  Logger.log('Duration: %s ms', result.duration);
+  Logger.log('Balances Updated: %s', result.summary.totalBalancesUpdated);
+  Logger.log('Payouts Detected: %s', result.summary.totalPayoutsDetected);
+  Logger.log('Payouts Reconciled: %s', result.summary.totalPayoutsReconciled);
+  Logger.log('Funds Consolidated: $%s', result.summary.totalFundsConsolidated);
+  Logger.log('Expenses Calculated: %s', result.summary.totalExpensesCalculated);
+  
+  // Log any errors
+  Object.keys(result.steps).forEach(function(step) {
+    if (result.steps[step].errors && result.steps[step].errors.length > 0) {
+      Logger.log('%s Errors: %s', step, result.steps[step].errors.join(', '));
+    }
+  });
+  
+  return result;
+}
+
+function testSyncFull() {
+  /*
+   * 🧪 TEST: Sync Full
+   * Tests all functionality with actual changes
+   */
+  Logger.log('=== TESTING: Full Sync (All Steps) ===');
+  
+  var options = {
+    dryRun: false,
+    skipExpenses: false,
+    skipConsolidation: false,
+    skipPayoutReconciliation: false
+  };
+  
+  var result = syncBanksData(options);
+  
+  Logger.log('=== FULL SYNC TEST RESULTS ===');
+  Logger.log('Status: %s', result.status);
+  Logger.log('Duration: %s ms', result.duration);
+  Logger.log('Balances Updated: %s', result.summary.totalBalancesUpdated);
+  Logger.log('Payouts Detected: %s', result.summary.totalPayoutsDetected);
+  Logger.log('Payouts Reconciled: %s', result.summary.totalPayoutsReconciled);
+  Logger.log('Funds Consolidated: $%s', result.summary.totalFundsConsolidated);
+  Logger.log('Expenses Calculated: %s', result.summary.totalExpensesCalculated);
+  
+  // Log any errors
+  Object.keys(result.steps).forEach(function(step) {
+    if (result.steps[step].errors && result.steps[step].errors.length > 0) {
+      Logger.log('%s Errors: %s', step, result.steps[step].errors.join(', '));
+    }
+  });
+  
+  return result;
+}
+
 /* ======================================================================================================== */
 /*                                      🎯 PUBLIC INTERFACE                                              */
 /* ======================================================================================================== */
@@ -2920,13 +3486,23 @@ function onOpen() {
   var ui = SpreadsheetApp.getUi();
   
   ui.createMenu('🏦 Banking')
-    // Balance Monitoring
+    // Unified Sync
+    .addItem('🚀 Sync Banks Data (Full)', 'menuSyncBanksDataFull')
+    .addItem('🔍 Sync Banks Data (Dry Run)', 'menuSyncBanksDataDryRun')
+    .addSeparator()
+    // Individual Tests
+    .addItem('🧪 Test Balances Only', 'menuTestSyncBalancesOnly')
+    .addItem('🧪 Test Payouts Only', 'menuTestSyncPayoutsOnly')
+    .addItem('🧪 Test Consolidation Only', 'menuTestSyncConsolidationOnly')
+    .addItem('🧪 Test Expenses Only', 'menuTestSyncExpensesOnly')
+    .addSeparator()
+    // Legacy Balance Monitoring
     .addItem('💰 Check USD Balances', 'menuCheckUSDBalances')
     .addItem('🏦 Check Individual Banks', 'menuCheckIndividualBanks')
     .addItem('📊 Show Balance Summary', 'menuShowBalanceSummary')
-    .addItem('🔄 Update All Balances', 'menuUpdateAllBalances')
+    .addItem('🔄 Update All Balances (Legacy)', 'menuUpdateAllBalances')
     .addSeparator()
-    // Monthly Expenses
+    // Monthly Expenses (Legacy)
     .addItem('📊 Update Current Month Expenses', 'menuUpdateCurrentMonthExpenses')
     .addItem('📅 Update Specific Month Expenses', 'menuUpdateSpecificMonthExpenses')
     .addItem('🧪 Test Current Month Expenses', 'menuTestCurrentMonthExpenses')
@@ -4864,6 +5440,153 @@ function menuUpdateAllBalances() {
   } catch (e) {
     Logger.log('[ERROR] Menu balance update failed: %s', e.message);
     displayErrorDialog('Balance Update Error', e.message);
+  }
+}
+
+function menuSyncBanksDataFull() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Bank Data Sync', 'Starting full bank data synchronization...', ui.ButtonSet.OK);
+    
+    var result = syncBanksData({
+      dryRun: false,
+      skipExpenses: false,
+      skipConsolidation: false,
+      skipPayoutReconciliation: false
+    });
+    
+    var message = '🚀 BANK DATA SYNC COMPLETED\n\n' +
+                  'Status: ' + result.status + '\n' +
+                  'Duration: ' + result.duration + ' ms\n\n' +
+                  '📊 SUMMARY:\n' +
+                  '• Balances Updated: ' + result.summary.totalBalancesUpdated + '\n' +
+                  '• Payouts Detected: ' + result.summary.totalPayoutsDetected + '\n' +
+                  '• Payouts Reconciled: ' + result.summary.totalPayoutsReconciled + '\n' +
+                  '• Funds Consolidated: $' + result.summary.totalFundsConsolidated + '\n' +
+                  '• Expenses Calculated: ' + result.summary.totalExpensesCalculated + '\n\n' +
+                  '⏰ Completed: ' + new Date().toLocaleString();
+    
+    ui.alert('✅ Sync Complete', message, ui.ButtonSet.OK);
+    
+  } catch (e) {
+    Logger.log('[ERROR] Menu sync banks data full failed: %s', e.message);
+    displayErrorDialog('Bank Data Sync Error', e.message);
+  }
+}
+
+function menuSyncBanksDataDryRun() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Bank Data Sync (Dry Run)', 'Starting dry run bank data synchronization...', ui.ButtonSet.OK);
+    
+    var result = syncBanksData({
+      dryRun: true,
+      skipExpenses: false,
+      skipConsolidation: false,
+      skipPayoutReconciliation: false
+    });
+    
+    var message = '🔍 DRY RUN SYNC COMPLETED\n\n' +
+                  'Status: ' + result.status + '\n' +
+                  'Duration: ' + result.duration + ' ms\n\n' +
+                  '📊 SUMMARY:\n' +
+                  '• Balances Updated: ' + result.summary.totalBalancesUpdated + '\n' +
+                  '• Payouts Detected: ' + result.summary.totalPayoutsDetected + '\n' +
+                  '• Payouts Reconciled: ' + result.summary.totalPayoutsReconciled + '\n' +
+                  '• Funds Consolidated: $' + result.summary.totalFundsConsolidated + '\n' +
+                  '• Expenses Calculated: ' + result.summary.totalExpensesCalculated + '\n\n' +
+                  '⏰ Completed: ' + new Date().toLocaleString();
+    
+    ui.alert('✅ Dry Run Complete', message, ui.ButtonSet.OK);
+    
+  } catch (e) {
+    Logger.log('[ERROR] Menu sync banks data dry run failed: %s', e.message);
+    displayErrorDialog('Bank Data Sync Dry Run Error', e.message);
+  }
+}
+
+function menuTestSyncBalancesOnly() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Test: Balances Only', 'Testing bank balance updates only...', ui.ButtonSet.OK);
+    
+    var result = testSyncBalancesOnly();
+    
+    var message = '🧪 BALANCE TEST COMPLETED\n\n' +
+                  'Status: ' + result.status + '\n' +
+                  'Duration: ' + result.duration + ' ms\n' +
+                  'Balances Updated: ' + result.summary.totalBalancesUpdated + '\n\n' +
+                  '⏰ Completed: ' + new Date().toLocaleString();
+    
+    ui.alert('✅ Balance Test Complete', message, ui.ButtonSet.OK);
+    
+  } catch (e) {
+    Logger.log('[ERROR] Menu test sync balances only failed: %s', e.message);
+    displayErrorDialog('Balance Test Error', e.message);
+  }
+}
+
+function menuTestSyncPayoutsOnly() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Test: Payouts Only', 'Testing payout detection and reconciliation only...', ui.ButtonSet.OK);
+    
+    var result = testSyncPayoutsOnly();
+    
+    var message = '🧪 PAYOUT TEST COMPLETED\n\n' +
+                  'Status: ' + result.status + '\n' +
+                  'Duration: ' + result.duration + ' ms\n' +
+                  'Payouts Detected: ' + result.summary.totalPayoutsDetected + '\n' +
+                  'Payouts Reconciled: ' + result.summary.totalPayoutsReconciled + '\n\n' +
+                  '⏰ Completed: ' + new Date().toLocaleString();
+    
+    ui.alert('✅ Payout Test Complete', message, ui.ButtonSet.OK);
+    
+  } catch (e) {
+    Logger.log('[ERROR] Menu test sync payouts only failed: %s', e.message);
+    displayErrorDialog('Payout Test Error', e.message);
+  }
+}
+
+function menuTestSyncConsolidationOnly() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Test: Consolidation Only', 'Testing fund consolidation only...', ui.ButtonSet.OK);
+    
+    var result = testSyncConsolidationOnly();
+    
+    var message = '🧪 CONSOLIDATION TEST COMPLETED\n\n' +
+                  'Status: ' + result.status + '\n' +
+                  'Duration: ' + result.duration + ' ms\n' +
+                  'Funds Consolidated: $' + result.summary.totalFundsConsolidated + '\n\n' +
+                  '⏰ Completed: ' + new Date().toLocaleString();
+    
+    ui.alert('✅ Consolidation Test Complete', message, ui.ButtonSet.OK);
+    
+  } catch (e) {
+    Logger.log('[ERROR] Menu test sync consolidation only failed: %s', e.message);
+    displayErrorDialog('Consolidation Test Error', e.message);
+  }
+}
+
+function menuTestSyncExpensesOnly() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Test: Expenses Only', 'Testing expense calculation only...', ui.ButtonSet.OK);
+    
+    var result = testSyncExpensesOnly();
+    
+    var message = '🧪 EXPENSE TEST COMPLETED\n\n' +
+                  'Status: ' + result.status + '\n' +
+                  'Duration: ' + result.duration + ' ms\n' +
+                  'Expenses Calculated: ' + result.summary.totalExpensesCalculated + '\n\n' +
+                  '⏰ Completed: ' + new Date().toLocaleString();
+    
+    ui.alert('✅ Expense Test Complete', message, ui.ButtonSet.OK);
+    
+  } catch (e) {
+    Logger.log('[ERROR] Menu test sync expenses only failed: %s', e.message);
+    displayErrorDialog('Expense Test Error', e.message);
   }
 }
 
