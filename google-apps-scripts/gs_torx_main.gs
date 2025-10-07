@@ -5248,7 +5248,7 @@ function reconcileTransferWithSpreadsheet(receivedAmount, bankName, accountName)
     // Debug: Show first few entries to understand the data structure
     for (var d = 0; d < Math.min(5, payoutData.length); d++) {
       var debugRow = payoutData[d];
-      Logger.log('[TRANSFER_RECONCILE] DEBUG Row ' + (d + 23) + ': User="' + debugRow[0] + '", Platform="' + debugRow[1] + '", Amount=' + debugRow[6] + ', Received="' + debugRow[7] + '"');
+      Logger.log('[TRANSFER_RECONCILE] DEBUG Row ' + (d + 23) + ': User="' + debugRow[0] + '", Platform="' + debugRow[1] + '", Amount=' + debugRow[6] + ', Received=' + debugRow[7] + ' (checkbox)');
       // Debug all columns to find the correct amount column
       Logger.log('[TRANSFER_RECONCILE] DEBUG All columns: A="' + debugRow[0] + '", B="' + debugRow[1] + '", C="' + debugRow[2] + '", D="' + debugRow[3] + '", E="' + debugRow[4] + '", F="' + debugRow[5] + '", G="' + debugRow[6] + '", H="' + debugRow[7] + '"');
     }
@@ -5260,10 +5260,10 @@ function reconcileTransferWithSpreadsheet(receivedAmount, bankName, accountName)
       var row = payoutData[i];
       var platform = String(row[1] || '').trim(); // Column B (Platform)
       var baseAmount = Number(row[6] || 0); // Column G (Amount)
-      var received = String(row[7] || '').trim().toLowerCase(); // Column H (Received)
+      var received = row[7]; // Column H (Received) - checkbox value
       
-      // Skip if already marked as received
-      if (received === 'received' || received === 'yes' || received === 'true') {
+      // Skip if already marked as received (checkbox is checked)
+      if (received === true || received === 'true' || received === 'received' || received === 'yes') {
         continue;
       }
       
@@ -5301,7 +5301,7 @@ function reconcileTransferWithSpreadsheet(receivedAmount, bankName, accountName)
       var adjustmentAmount = bestMatch.adjustment;
       
       // Mark as received
-      sheet.getRange(reconcileRow, 8).setValue('Received'); // Column H
+      sheet.getRange(reconcileRow, 8).setValue(true); // Column H - Check the checkbox
       
       // Add adjustment note if needed
       if (Math.abs(adjustmentAmount) > 10) { // Only note significant adjustments
@@ -5366,10 +5366,10 @@ function reconcilePayoutWithSpreadsheet(receivedAmount, bankName) {
       var row = payoutData[i];
       var platform = String(row[1] || '').trim(); // Column B (Platform)
       var baseAmount = Number(row[6] || 0); // Column G (Amount)
-      var received = String(row[7] || '').trim().toLowerCase(); // Column H (Received)
+      var received = row[7]; // Column H (Received) - checkbox value
       
-      // Skip if already marked as received
-      if (received === 'received' || received === 'yes' || received === 'true') {
+      // Skip if already marked as received (checkbox is checked)
+      if (received === true || received === 'true' || received === 'received' || received === 'yes') {
         continue;
       }
       
@@ -5404,7 +5404,7 @@ function reconcilePayoutWithSpreadsheet(receivedAmount, bankName) {
       var adjustmentAmount = bestMatch.adjustment;
       
       // Mark as received
-      sheet.getRange(reconcileRow, 8).setValue('Received'); // Column H
+      sheet.getRange(reconcileRow, 8).setValue(true); // Column H - Check the checkbox
       
       // Add adjustment note if needed
       if (Math.abs(adjustmentAmount) > 10) { // Only note significant adjustments
