@@ -2800,82 +2800,35 @@ function updateBankBalance_(sh, bankName, summary, note) {
 }
 
 function updateAllBalances() {
+  /*
+   * 🔄 UPDATE ALL BALANCES (Legacy)
+   * 
+   * This function now uses the unified syncBanksData method
+   * for consistency and better error handling
+   */
+  
   try {
-    Logger.log('=== STARTING BALANCE UPDATE ===');
+    Logger.log('=== STARTING BALANCE UPDATE (Legacy) ===');
     
-    var sh = sheet_(SHEET_NAME);
-    if (!sh) {
-      throw new Error('Payouts sheet not found');
+    // Use the unified sync method with default options
+    var result = syncBanksData({
+      dryRun: false,
+      skipExpenses: false,
+      skipConsolidation: false,
+      skipPayoutReconciliation: false
+    });
+    
+    if (result.status === 'success') {
+      Logger.log('=== BALANCE UPDATE COMPLETED ===');
+      Logger.log('Sync completed in %s ms', result.duration);
+      Logger.log('Balances updated: %s', result.summary.totalBalancesUpdated);
+      Logger.log('Payouts detected: %s', result.summary.totalPayoutsDetected);
+      Logger.log('Payouts reconciled: %s', result.summary.totalPayoutsReconciled);
+      Logger.log('Funds consolidated: $%s', result.summary.totalFundsConsolidated);
+      Logger.log('Expenses calculated: %s', result.summary.totalExpensesCalculated);
+    } else {
+      Logger.log('[ERROR] Balance update failed: %s', result.error);
     }
-    
-    // Check proxy health
-    if (!proxyIsUp_()) {
-      Logger.log('[WARNING] Proxy is not healthy, skipping balance updates');
-      return;
-    }
-    
-    var totalUpdated = 0;
-    
-    // Update Mercury
-    try {
-      var mercurySummary = fetchMercurySummary_();
-      updateBankBalance_(sh, 'Mercury', mercurySummary, 'Mercury balance update');
-      totalUpdated++;
-    } catch (e) {
-      Logger.log('[ERROR] Mercury balance update failed: %s', e.message);
-    }
-    
-    // Update Airwallex - DISABLED due to API access issues
-    // Balance is set manually and should not be modified
-    // try {
-    //   var airwallexSummary = fetchAirwallexSummary_();
-    //   updateBankBalance_(sh, 'Airwallex', airwallexSummary, 'Airwallex balance update');
-    //   totalUpdated++;
-    // } catch (e) {
-    //   Logger.log('[ERROR] Airwallex balance update failed: %s', e.message);
-    // }
-    
-    Logger.log('[AIRWALLEX] Skipping balance update - manually set balance preserved');
-    
-    // Update Revolut
-    try {
-      var revolutSummary = fetchRevolutSummary_();
-      updateBankBalance_(sh, 'Revolut', revolutSummary, 'Revolut balance update');
-      totalUpdated++;
-    } catch (e) {
-      Logger.log('[ERROR] Revolut balance update failed: %s', e.message);
-    }
-    
-    // Update Wise
-    try {
-      var wiseSummary = fetchWiseSummary_();
-      updateBankBalance_(sh, 'Wise', wiseSummary, 'Wise balance update');
-      totalUpdated++;
-    } catch (e) {
-      Logger.log('[ERROR] Wise balance update failed: %s', e.message);
-    }
-    
-    // Update Nexo (USD only)
-    try {
-      var nexoSummary = fetchNexoSummary_();
-      updateBankBalance_(sh, 'Nexo', { USD: nexoSummary.USD || 0 }, 'Nexo balance update');
-      totalUpdated++;
-    } catch (e) {
-      Logger.log('[ERROR] Nexo balance update failed: %s', e.message);
-    }
-    
-    Logger.log('[BALANCE] Updates completed: %s banks updated', totalUpdated);
-    
-    // Update monthly expenses for current month
-    try {
-      Logger.log('[EXPENSES] Starting monthly expense calculation...');
-      updateCurrentMonthExpenses();
-      Logger.log('[EXPENSES] Monthly expense calculation completed');
-    } catch (e) {
-      Logger.log('[ERROR] Monthly expense calculation failed: %s', e.message);
-    }
-    
-    Logger.log('=== BALANCE UPDATE COMPLETED ===');
     
   } catch (e) {
     Logger.log('[ERROR] Balance update failed: %s', e.message);
@@ -2902,6 +2855,16 @@ function syncBanksData(options) {
    * @param {boolean} options.skipConsolidation - If true, skip fund consolidation
    * @param {boolean} options.skipPayoutReconciliation - If true, skip payout reconciliation
    */
+  
+  // Set default options if not provided
+  if (!options) {
+    options = {
+      dryRun: false,
+      skipExpenses: false,
+      skipConsolidation: false,
+      skipPayoutReconciliation: false
+    };
+  }
   
   var startTime = new Date();
   var result = {
