@@ -3681,32 +3681,213 @@ function payUsersForMonth(monthStr) {
   Logger.log('[PAY_USERS] Starting payments for month: %s', monthStr);
   
   try {
-    // This is a placeholder - would contain actual payment logic
-    // For now, return a mock result
-    var result = {
+    // Get payment data from Google Sheet
+    var paymentData = getPaymentDataForMonth_(monthStr);
+    if (!paymentData || paymentData.length === 0) {
+      Logger.log('[PAY_USERS] No payment data found for month: %s', monthStr);
+      return { success: false, error: 'No payment data found', month: monthStr };
+    }
+    
+    Logger.log('[PAY_USERS] Found %s users to pay for %s', paymentData.length, monthStr);
+    
+    var results = {
       month: monthStr,
-      totalUsers: 5,
-      totalPayoutUsd: 1250.00,
-      totalPayoutEur: 1500.00,
-      users: [
-        { name: 'User1', amount: 250, currency: 'EUR', status: 'sent', transactionId: 'tx-001' },
-        { name: 'User2', amount: 300, currency: 'EUR', status: 'sent', transactionId: 'tx-002' },
-        { name: 'User3', amount: 200, currency: 'EUR', status: 'sent', transactionId: 'tx-003' },
-        { name: 'User4', amount: 400, currency: 'EUR', status: 'sent', transactionId: 'tx-004' },
-        { name: 'User5', amount: 350, currency: 'EUR', status: 'sent', transactionId: 'tx-005' }
-      ],
-      dryRun: false,
-      timestamp: new Date().toISOString()
+      totalUsers: paymentData.length,
+      successfulPayments: 0,
+      failedPayments: 0,
+      totalUsdFromMain: 0,
+      users: [],
+      errors: [],
+      timestamp: nowStamp_()
     };
     
-    Logger.log('[PAY_USERS] Payments completed: %s users, $%s USD, €%s EUR', 
-               result.totalUsers, result.totalPayoutUsd.toFixed(2), result.totalPayoutEur.toFixed(2));
+    // Process each user payment
+    for (var i = 0; i < paymentData.length; i++) {
+      var userData = paymentData[i];
+      var userName = userData[0]; // Column A: User name
+      var amount = userData[1];   // Column B: Amount
+      var currency = userData[2]; // Column C: Currency (USD/EUR)
+      var accountName = userData[3]; // Column D: Account name
+      
+      Logger.log('[PAY_USERS] Processing payment: %s -> %s %s %s', userName, amount, currency, accountName);
+      
+      try {
+        var paymentResult = processUserPayment_(userName, amount, currency, accountName, monthStr);
+        
+        if (paymentResult.success) {
+          results.successfulPayments++;
+          results.totalUsdFromMain += paymentResult.usdAmount;
+          results.users.push({
+            name: userName,
+            amount: amount,
+            currency: currency,
+            account: accountName,
+            status: 'sent',
+            transactionId: paymentResult.transactionId,
+            usdAmount: paymentResult.usdAmount,
+            exchangeRate: paymentResult.exchangeRate
+          });
+          
+          Logger.log('[PAY_USERS] ✅ Payment successful: %s %s to %s (ID: %s)', 
+                     amount, currency, accountName, paymentResult.transactionId);
+        } else {
+          results.failedPayments++;
+          results.errors.push(userName + ': ' + paymentResult.error);
+          Logger.log('[PAY_USERS] ❌ Payment failed: %s - %s', userName, paymentResult.error);
+        }
+        
+      } catch (e) {
+        results.failedPayments++;
+        results.errors.push(userName + ': ' + e.message);
+        Logger.log('[PAY_USERS] ❌ Payment error: %s - %s', userName, e.message);
+      }
+    }
     
-    return result;
+    Logger.log('[PAY_USERS] Payments completed: %s successful, %s failed, $%s total from Main USD', 
+               results.successfulPayments, results.failedPayments, results.totalUsdFromMain.toFixed(2));
+    
+    return {
+      success: results.failedPayments === 0,
+      results: results,
+      timestamp: nowStamp_()
+    };
     
   } catch (e) {
     Logger.log('[ERROR] Payments failed: %s', e.message);
-    throw e;
+    return { success: false, error: e.message, month: monthStr };
+  }
+}
+
+/**
+ * Process individual user payment with automatic currency conversion
+ * Always uses Main USD as source, converts to target currency if needed
+ */
+function processUserPayment_(userName, amount, targetCurrency, accountName, monthStr) {
+  Logger.log('[USER_PAYMENT] Processing: %s %s to %s (%s)', amount, targetCurrency, accountName, userName);
+  
+  try {
+    // Always use Main USD as source account
+    var sourceAccount = 'Main';
+    var sourceCurrency = 'USD';
+    
+    // Calculate USD amount needed (if target is EUR, we'll convert during transfer)
+    var usdAmount = amount;
+    var exchangeRate = 1.0;
+    
+    if (targetCurrency === 'EUR') {
+      // Get current USD/EUR exchange rate
+      exchangeRate = getCurrentExchangeRate_('USD', 'EUR');
+      usdAmount = amount * exchangeRate; // Convert EUR amount to USD needed
+      
+      Logger.log('[USER_PAYMENT] Currency conversion: €%s = $%s (rate: %s)', 
+                 amount.toFixed(2), usdAmount.toFixed(2), exchangeRate.toFixed(4));
+    }
+    
+    // Check if Main USD has sufficient balance
+    var mainBalance = getMainUsdBalance_();
+    if (mainBalance < usdAmount) {
+      throw new Error('Insufficient Main USD balance: $' + mainBalance.toFixed(2) + ' < $' + usdAmount.toFixed(2));
+    }
+    
+    // Create transfer reference
+    var reference = 'Payment ' + monthStr + ' - ' + userName;
+    
+    // Execute transfer with currency conversion
+    var transferResult = revolutTransferBetweenAccounts_(
+      sourceAccount,    // Always Main USD
+      accountName,     // Target user account
+      targetCurrency,  // Target currency (USD or EUR)
+      amount,          // Amount in target currency
+      reference
+    );
+    
+    if (transferResult && transferResult.ok) {
+      return {
+        success: true,
+        transactionId: transferResult.transfer?.id || 'unknown',
+        usdAmount: usdAmount,
+        exchangeRate: exchangeRate,
+        message: 'Payment successful'
+      };
+    } else {
+      throw new Error('Transfer failed: ' + (transferResult?.error || 'Unknown error'));
+    }
+    
+  } catch (e) {
+    Logger.log('[ERROR] User payment failed: %s', e.message);
+    return {
+      success: false,
+      error: e.message,
+      usdAmount: 0,
+      exchangeRate: 0
+    };
+  }
+}
+
+/**
+ * Get current exchange rate between two currencies
+ */
+function getCurrentExchangeRate_(fromCurrency, toCurrency) {
+  try {
+    // Use Revolut's exchange rate API or a simple fixed rate for now
+    // In production, you might want to use a real exchange rate API
+    
+    if (fromCurrency === 'USD' && toCurrency === 'EUR') {
+      // Example rate - in production, fetch real-time rate
+      return 0.85; // 1 USD = 0.85 EUR (example)
+    } else if (fromCurrency === 'EUR' && toCurrency === 'USD') {
+      return 1.18; // 1 EUR = 1.18 USD (example)
+    }
+    
+    return 1.0; // Same currency or unknown pair
+    
+  } catch (e) {
+    Logger.log('[ERROR] Failed to get exchange rate: %s', e.message);
+    return 1.0; // Fallback to 1:1
+  }
+}
+
+/**
+ * Get Main USD account balance
+ */
+function getMainUsdBalance_() {
+  try {
+    var revolutAccounts = getRevolutAccounts_();
+    for (var i = 0; i < revolutAccounts.length; i++) {
+      var account = revolutAccounts[i];
+      if (account.name === 'Main' && account.currency === 'USD') {
+        return account.balance || 0;
+      }
+    }
+    Logger.log('[ERROR] Main USD account not found');
+    return 0;
+  } catch (e) {
+    Logger.log('[ERROR] Failed to get Main USD balance: %s', e.message);
+    return 0;
+  }
+}
+
+/**
+ * Get payment data from Google Sheet for a specific month
+ */
+function getPaymentDataForMonth_(monthStr) {
+  try {
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Payments');
+    if (!sheet) {
+      Logger.log('[ERROR] Payments sheet not found');
+      return [];
+    }
+    
+    // This is a placeholder - you'll need to implement the actual logic
+    // to read payment data from your Google Sheet based on the month
+    Logger.log('[PAYMENT_DATA] Getting payment data for month: %s', monthStr);
+    
+    // For now, return empty array - implement based on your sheet structure
+    return [];
+    
+  } catch (e) {
+    Logger.log('[ERROR] Failed to get payment data: %s', e.message);
+    return [];
   }
 }
 
