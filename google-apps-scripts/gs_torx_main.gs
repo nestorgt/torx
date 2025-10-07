@@ -3770,23 +3770,26 @@ function processUserPayment_(userName, amount, targetCurrency, accountName, mont
     var sourceAccount = 'Main';
     var sourceCurrency = 'USD';
     
-    // Calculate USD amount needed (if target is EUR, we'll convert during transfer)
-    var usdAmount = amount;
+    // For EUR transfers, we'll specify the exact EUR amount to arrive
+    // Revolut will automatically convert the required USD amount from Main account
+    var estimatedUsdCost = amount;
     var exchangeRate = 1.0;
     
     if (targetCurrency === 'EUR') {
-      // Get current USD/EUR exchange rate
+      // Get current USD/EUR exchange rate for estimation
       exchangeRate = getCurrentExchangeRate_('USD', 'EUR');
-      usdAmount = amount * exchangeRate; // Convert EUR amount to USD needed
+      estimatedUsdCost = amount / exchangeRate; // Estimate USD cost (EUR amount / rate)
       
-      Logger.log('[USER_PAYMENT] Currency conversion: €%s = $%s (rate: %s)', 
-                 amount.toFixed(2), usdAmount.toFixed(2), exchangeRate.toFixed(4));
+      Logger.log('[USER_PAYMENT] EUR transfer: €%s will arrive exactly (estimated USD cost: $%s, rate: %s)', 
+                 amount.toFixed(2), estimatedUsdCost.toFixed(2), exchangeRate.toFixed(4));
     }
     
-    // Check if Main USD has sufficient balance
+    // Check if Main USD has sufficient balance (with some buffer for exchange rate fluctuations)
     var mainBalance = getMainUsdBalance_();
-    if (mainBalance < usdAmount) {
-      throw new Error('Insufficient Main USD balance: $' + mainBalance.toFixed(2) + ' < $' + usdAmount.toFixed(2));
+    var requiredBalance = estimatedUsdCost * 1.05; // 5% buffer for rate fluctuations
+    
+    if (mainBalance < requiredBalance) {
+      throw new Error('Insufficient Main USD balance: $' + mainBalance.toFixed(2) + ' < $' + requiredBalance.toFixed(2) + ' (required with buffer)');
     }
     
     // Create transfer reference
@@ -3805,9 +3808,9 @@ function processUserPayment_(userName, amount, targetCurrency, accountName, mont
       return {
         success: true,
         transactionId: transferResult.transfer?.id || 'unknown',
-        usdAmount: usdAmount,
+        usdAmount: estimatedUsdCost,
         exchangeRate: exchangeRate,
-        message: 'Payment successful'
+        message: 'Payment successful - exact amount arrived'
       };
     } else {
       throw new Error('Transfer failed: ' + (transferResult?.error || 'Unknown error'));
@@ -3833,10 +3836,10 @@ function getCurrentExchangeRate_(fromCurrency, toCurrency) {
     // In production, you might want to use a real exchange rate API
     
     if (fromCurrency === 'USD' && toCurrency === 'EUR') {
-      // Example rate - in production, fetch real-time rate
-      return 0.85; // 1 USD = 0.85 EUR (example)
+      // Example rate - in production, fetch real-time rate from Revolut API
+      return 0.85; // 1 USD = 0.85 EUR (example rate for estimation)
     } else if (fromCurrency === 'EUR' && toCurrency === 'USD') {
-      return 1.18; // 1 EUR = 1.18 USD (example)
+      return 1.18; // 1 EUR = 1.18 USD (example rate for estimation)
     }
     
     return 1.0; // Same currency or unknown pair
