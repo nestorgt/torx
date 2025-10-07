@@ -5248,6 +5248,8 @@ function reconcileTransferWithSpreadsheet(receivedAmount, bankName, accountName)
     for (var d = 0; d < Math.min(5, payoutData.length); d++) {
       var debugRow = payoutData[d];
       Logger.log('[TRANSFER_RECONCILE] DEBUG Row ' + (d + 23) + ': User="' + debugRow[0] + '", Platform="' + debugRow[1] + '", Amount=' + debugRow[5] + ', Received="' + debugRow[7] + '"');
+      // Debug all columns to find the correct amount column
+      Logger.log('[TRANSFER_RECONCILE] DEBUG All columns: A="' + debugRow[0] + '", B="' + debugRow[1] + '", C="' + debugRow[2] + '", D="' + debugRow[3] + '", E="' + debugRow[4] + '", F="' + debugRow[5] + '", G="' + debugRow[6] + '", H="' + debugRow[7] + '"');
     }
     
     var bestMatch = { row: -1, score: 0, adjustment: 0 };
