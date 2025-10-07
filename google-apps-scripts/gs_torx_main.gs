@@ -5258,21 +5258,24 @@ function reconcilePayoutWithSpreadsheet(receivedAmount, bankName) {
 
 function calculateExpectedPayoutAmount_(platformName, baseAmount) {
   if (platformName && platformName.toLowerCase().includes('topstep')) {
-    // Topstep: ~90% of base amount minus $20 transfer fee
-    var expected = Math.max(baseAmount * 0.9 - 20, baseAmount * 0.88);
+    // Topstep: ~90% of base amount minus $20 transfer fee (sometimes 100%)
+    var expected90 = baseAmount * 0.9 - 20;
+    var expected100 = baseAmount - 20;
+    var expected = Math.max(expected90, expected100);
     return {
       expected: expected,
-      min: expected * 0.95,  // 5% variance
-      max: expected * 1.05,
+      min: Math.min(expected90 * 0.95, baseAmount * 0.85),  // Allow wider range
+      max: Math.max(expected100 * 1.05, baseAmount * 1.05), // Allow up to 105% of base
       platform: 'Topstep'
     };
   } else if (platformName && platformName.toLowerCase().includes('mffu')) {
     // MFFU: ~80% of base amount minus $20 transfer fee
-    var expected = Math.max(baseAmount * 0.8 - 20, baseAmount * 0.75);
+    var expected80 = baseAmount * 0.8 - 20;
+    var expected = Math.max(expected80, baseAmount * 0.75);
     return {
       expected: expected,
-      min: expected * 0.95,  // 5% variance
-      max: expected * 1.05,
+      min: Math.min(expected80 * 0.95, baseAmount * 0.70),  // Allow wider range
+      max: Math.max(expected * 1.05, baseAmount * 0.85),    // Allow up to 85% of base
       platform: 'MFFU'
     };
   } else {
@@ -5280,8 +5283,8 @@ function calculateExpectedPayoutAmount_(platformName, baseAmount) {
     var expected = baseAmount * 0.95; // Assume 5% less
     return {
       expected: expected,
-      min: expected * 0.95,
-      max: baseAmount,
+      min: expected * 0.90,  // Allow wider range
+      max: baseAmount * 1.05, // Allow up to 105% of base
       platform: 'Unknown'
     };
   }
