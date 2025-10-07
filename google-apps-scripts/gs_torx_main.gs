@@ -437,8 +437,15 @@ function httpProxyJson_(path) {
     Logger.log('[HTTP_PROXY] Response: Status=%s, BodyLength=%s', statusCode, responseText.length);
     
     if (statusCode >= 400) {
-      Logger.log('[HTTP_PROXY] ❌ Error Response: %s', responseText);
-      throw new Error('HTTP ' + statusCode + ' ' + path + ' -> ' + responseText);
+      // Truncate HTML error responses to avoid log noise
+      var truncatedResponse = responseText;
+      if (responseText.includes('<!DOCTYPE html>') || responseText.includes('<html')) {
+        truncatedResponse = 'HTML Error Page (truncated)';
+      } else if (responseText.length > 200) {
+        truncatedResponse = responseText.substring(0, 200) + '...';
+      }
+      Logger.log('[HTTP_PROXY] ❌ Error Response: %s', truncatedResponse);
+      throw new Error('HTTP ' + statusCode + ' ' + path + ' -> ' + truncatedResponse);
     }
     
     if (statusCode >= 200 && statusCode < 300) {
@@ -501,8 +508,15 @@ function httpProxyPostJson_(path, body) {
     Logger.log('[HTTP_POST] Response: Status=%s, BodyLength=%s', statusCode, responseText.length);
     
     if (statusCode >= 400) {
-      Logger.log('[HTTP_POST] ❌ Error Response: %s', responseText);
-      throw new Error('HTTP ' + statusCode + ' ' + path + ' -> ' + responseText);
+      // Truncate HTML error responses to avoid log noise
+      var truncatedResponse = responseText;
+      if (responseText.includes('<!DOCTYPE html>') || responseText.includes('<html')) {
+        truncatedResponse = 'HTML Error Page (truncated)';
+      } else if (responseText.length > 200) {
+        truncatedResponse = responseText.substring(0, 200) + '...';
+      }
+      Logger.log('[HTTP_POST] ❌ Error Response: %s', truncatedResponse);
+      throw new Error('HTTP ' + statusCode + ' ' + path + ' -> ' + truncatedResponse);
     }
     
     if (statusCode >= 200 && statusCode < 300) {
@@ -848,7 +862,14 @@ function mercuryTransferToMain_(fromAccountId, amount, currency, reference) {
       Logger.log('[MERCURY] ✅ Transfer endpoint %s success', endpoints[i]);
       return result;
     } catch (e) {
-      Logger.log('[MERCURY] ⚪ Transfer endpoint %s failed: %s', endpoints[i], e.message.split('HTTP')[1] || e.message);
+      // Truncate HTML error responses to avoid log noise
+      var errorMsg = e.message.split('HTTP')[1] || e.message;
+      if (errorMsg.includes('<!DOCTYPE html>') || errorMsg.includes('<html')) {
+        errorMsg = 'HTML Error Page (truncated)';
+      } else if (errorMsg.length > 200) {
+        errorMsg = errorMsg.substring(0, 200) + '...';
+      }
+      Logger.log('[MERCURY] ⚪ Transfer endpoint %s failed: %s', endpoints[i], errorMsg);
     }
   }
   
