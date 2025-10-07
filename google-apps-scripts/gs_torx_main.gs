@@ -3471,36 +3471,34 @@ function onOpen() {
   var ui = SpreadsheetApp.getUi();
   
   ui.createMenu('🏦 Banking')
-    // Unified Sync
+    // Unified Sync (Primary Functions)
     .addItem('🚀 Sync Banks Data (Full)', 'menuSyncBanksDataFull')
     .addItem('🔍 Sync Banks Data (Dry Run)', 'menuSyncBanksDataDryRun')
     .addSeparator()
-    // Individual Tests
+    // Individual Component Tests
     .addItem('🧪 Test Balances Only', 'menuTestSyncBalancesOnly')
     .addItem('🧪 Test Payouts Only', 'menuTestSyncPayoutsOnly')
-    .addItem('🧪 Test Consolidation Only', 'menuTestSyncConsolidationOnly')
     .addItem('🧪 Test Expenses Only', 'menuTestSyncExpensesOnly')
     .addSeparator()
-    // Legacy Balance Monitoring
+    // Balance Monitoring
     .addItem('💰 Check USD Balances', 'menuCheckUSDBalances')
     .addItem('🏦 Check Individual Banks', 'menuCheckIndividualBanks')
     .addItem('📊 Show Balance Summary', 'menuShowBalanceSummary')
-    .addItem('🔄 Update All Balances (Legacy)', 'menuUpdateAllBalances')
     .addSeparator()
-    // Monthly Expenses (Legacy)
-    .addItem('📊 Update Current Month Expenses', 'menuUpdateCurrentMonthExpenses')
-    .addItem('📅 Update Specific Month Expenses', 'menuUpdateSpecificMonthExpenses')
-    .addItem('🧪 Test Current Month Expenses', 'menuTestCurrentMonthExpenses')
+    // Legacy Functions
+    .addSubMenu(ui.createMenu('📜 Legacy')
+      .addItem('🔄 Update All Balances (Old)', 'menuUpdateAllBalances')
+      .addItem('📊 Update Current Month Expenses', 'menuUpdateCurrentMonthExpenses')
+      .addItem('📅 Update Specific Month Expenses', 'menuUpdateSpecificMonthExpenses')
+      .addItem('🧪 Test Current Month Expenses', 'menuTestCurrentMonthExpenses')
+      .addItem('🔍 Check Minimum Balances (Dry Run)', 'dryRunCheckAllBankMinimumBalances')
+      .addItem('💳 Auto-Topup Low Balances', 'checkAllBankMinimumBalances'))
     .addSeparator()
-    // Auto Topup
-    .addItem('🔍 Check Minimum Balances (Dry Run)', 'dryRunCheckAllBankMinimumBalances')
-    .addItem('💳 Auto-Topup Low Balances', 'checkAllBankMinimumBalances')
-    .addSeparator()
-    // Clear outputs
     .addItem('❌ Clear Outputs', 'menuClearOutputs')
     .addToUi();
     
   ui.createMenu('💰 Payments')
+    // Payment Processing
     .addItem('🧪 Dry Run Current Month', 'dryRunPayUsersForCurrentMonth')
     .addItem('💰 Pay Current Month', 'payUsersForCurrentMonth')
     .addSeparator()
@@ -3510,30 +3508,24 @@ function onOpen() {
     .addItem('🗓️ Dry Run Specific Month', 'menuDryRunSpecificMonth')
     .addItem('🗓️ Pay Specific Month', 'menuPaySpecificMonth')
     .addSeparator()
+    // Fund Consolidation (Money Movement)
+    .addItem('🧪 Test Consolidation Only', 'menuTestSyncConsolidationOnly')
+    .addSeparator()
+    // Payment Status & Testing
     .addItem('🔍 Check Status', 'getCurrentMonthStatus')
     .addItem('🧪 Test Payment System', 'testPaymentSystem')
     .addToUi();
 
   ui.createMenu('🧪 System Tests')
-    .addItem('📊 Validate Sheet', 'testSheetValidation')
     .addItem('🚀 Complete System Test', 'testCompleteSystem')
+    .addItem('📊 Validate Sheet', 'testSheetValidation')
+    .addSeparator()
+    .addItem('🧪 Test Unified Sync (Full)', 'testSyncFull')
+    .addItem('🧪 Test Unified Sync (Dry Run)', 'testSyncDryRun')
+    .addSeparator()
+    .addItem('🧪 Test Sync Components', 'menuTestSyncBalancesOnly')
     .addToUi();
     
-  ui.createMenu('🔄 Consolidation')
-   .addItem('💰 Consolidate Funds → Main', 'menuExecuteConsolidation')
-   .addItem('🧪 Test Consolidation', 'menuTestConsolidation')
-   .addItem('📋 Show Available Banks', 'menuShowAvailableBanks')
-   .addSeparator()
-         .addItem('⏳ Check Pending Transfers', 'menuCheckPendingTransfers')
-         .addItem('✅ Mark Transfer Complete', 'menuMarkTransferComplete')
-         .addItem('🗑️ Clear Old Transfers', 'menuClearOldTransfers')
-    .addSeparator()
-    .addItem('🚀 Test Daily Consolidation Trigger', 'testDailyConsolidationTrigger')
-    .addItem('💰 Test Balance Update Trigger', 'testBalanceUpdateTrigger')
-    .addItem('🔍 Mercury API Discovery', 'testMercuryApiDiscovery')
-   .addSeparator()
-   .addItem('🧪 Test Minimum Balance Trigger', 'testMinimumBalanceTrigger')
-    .addToUi();
     
 }
 
@@ -4700,8 +4692,8 @@ function testCompleteSystem() {
     Logger.log('[TEST] Testing payment prerequisites...');
     var prereqs = checkPaymentPrerequisites();
     
-    Logger.log('[TEST] Testing fund consolidation...');
-    var consolidationResult = dryRunConsolidateFundsToMain();
+    Logger.log('[TEST] Testing unified sync system...');
+    var syncResult = syncBanksData({ dryRun: true, skipExpenses: false, skipConsolidation: false, skipPayoutReconciliation: false });
     
     Logger.log('[TEST] Testing balance updates...');
     var balanceUp = proxyIsUp_();
@@ -4709,11 +4701,15 @@ function testCompleteSystem() {
     Logger.log('[TEST] Testing Mercury API...');
     var mercuryAccounts = getMercuryAccounts_();
     
+    Logger.log('[TEST] Testing Revolut API...');
+    var revolutAccounts = getRevolutAccounts_();
+    
     var summary = {
       prerequisites: prereqs.allGood ? 'PASS' : 'FAIL',
-      consolidation: consolidationResult.totalProcessed > 0 ? 'PASS' : 'SKIP',
+      unifiedSync: syncResult.success ? 'PASS' : 'FAIL',
       proxy: balanceUp ? 'PASS' : 'FAIL',
       mercury: mercuryAccounts.length > 0 ? 'PASS' : 'SKIP',
+      revolut: revolutAccounts.length > 0 ? 'PASS' : 'SKIP',
       timestamp: nowStamp_()
     };
     
@@ -4721,10 +4717,11 @@ function testCompleteSystem() {
     
     SpreadsheetApp.getUi().alert('System Test', 
       'Unified System Test Results:\n\n' +
-      'Prerequisites: ' + summary.prerequisites + '\n' +
-      'Consolidation: ' + summary.consolidation + '\n' +
-      'Proxy: ' + summary.proxy + '\n' +
-      'Mercury: ' + summary.mercury + '\n\n' +
+      'Payment Prerequisites: ' + summary.prerequisites + '\n' +
+      'Unified Sync System: ' + summary.unifiedSync + '\n' +
+      'Proxy Health: ' + summary.proxy + '\n' +
+      'Mercury API: ' + summary.mercury + '\n' +
+      'Revolut API: ' + summary.revolut + '\n\n' +
       'All systems operational! 🚀', 
       SpreadsheetApp.getUi().ButtonSet.OK);
     
