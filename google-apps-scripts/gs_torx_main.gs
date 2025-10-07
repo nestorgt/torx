@@ -5050,14 +5050,14 @@ function reconcilePayoutWithSpreadsheet(receivedAmount, bankName) {
       return { success: false, error: 'Payouts sheet not found' };
     }
     
-    // Get the data from A22 downwards (User, Platform, Account ID, Month, Day, Amount, Received)
+    // Get the data from A23 downwards (User, Platform, Account ID, Month, Day, Amount, Received)
     var lastRow = sheet.getLastRow();
-    if (lastRow < 22) {
+    if (lastRow < 23) {
       Logger.log('[ERROR] No payout data found (sheet too short)');
       return { success: false, error: 'No payout data found' };
     }
     
-    var payoutData = sheet.getRange(22, 1, lastRow - 21, 8).getValues();
+    var payoutData = sheet.getRange(23, 1, lastRow - 22, 8).getValues();
     Logger.log('[PAYOUT_RECONCILE] Checking ' + payoutData.length + ' payout entries...');
     
     var bestMatch = { row: -1, score: 0, adjustment: 0 };
@@ -5085,11 +5085,11 @@ function reconcilePayoutWithSpreadsheet(receivedAmount, bankName) {
       // Check if received amount matches expected range
       if (receivedAmount >= expectedCalc.min && receivedAmount <= expectedCalc.max) {
         var score = 1 - Math.abs(receivedAmount - expectedCalc.expected) / expectedCalc.expected;
-        Logger.log('[PAYOUT_RECONCILE] Row ' + (i + 22) + ': Platform=' + platform + ', Base=$' + baseAmount + ', Expected=' + expectedCalc.expected + ', Score=' + score.toFixed(3));
+        Logger.log('[PAYOUT_RECONCILE] Row ' + (i + 23) + ': Platform=' + platform + ', Base=$' + baseAmount + ', Expected=' + expectedCalc.expected + ', Score=' + score.toFixed(3));
         
         if (score > bestMatch.score) {
           bestMatch = { 
-            row: i + 22, 
+            row: i + 23, 
             score: score, 
             adjustment: receivedAmount - baseAmount,
             platform: platform,
