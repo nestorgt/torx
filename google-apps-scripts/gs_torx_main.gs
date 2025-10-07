@@ -4310,6 +4310,114 @@ function TRIGGER_test() {
   return 'Test trigger works';
 }
 
+/**
+ * 🚀 DAILY BANK DATA SYNC TRIGGER (ESSENTIAL)
+ * 
+ * This is the main trigger for daily automation that:
+ * - Updates all bank balances
+ * - Calculates monthly expenses  
+ * - Detects and reconciles transfers
+ * - Marks transfers as received in Google Sheet
+ * 
+ * Schedule this trigger to run daily (e.g., every morning at 8 AM)
+ */
+function TRIGGER_syncAllBankData() {
+  Logger.log('=== DAILY BANK DATA SYNC TRIGGER ===');
+  Logger.log('[TRIGGER] Starting daily bank data sync...');
+  
+  try {
+    var startTime = new Date().getTime();
+    
+    // Run the complete unified sync
+    var result = syncBanksData({
+      dryRun: false,
+      skipExpenses: false,
+      skipConsolidation: false,
+      skipPayoutReconciliation: false
+    });
+    
+    var duration = new Date().getTime() - startTime;
+    
+    Logger.log('[TRIGGER] Daily sync completed in %s ms', duration);
+    Logger.log('[TRIGGER] Results: %s', JSON.stringify(result, null, 2));
+    
+    return {
+      success: result.success,
+      message: 'Daily bank data sync completed',
+      duration: duration,
+      results: result,
+      timestamp: nowStamp_()
+    };
+    
+  } catch (e) {
+    Logger.log('[ERROR] Daily sync trigger failed: %s', e.message);
+    return {
+      success: false,
+      error: e.message,
+      timestamp: nowStamp_()
+    };
+  }
+}
+
+/**
+ * 💰 MONTHLY PAYMENTS TRIGGER (ESSENTIAL)
+ * 
+ * This is the main trigger for monthly automation that:
+ * - Processes payments for the current month
+ * - Handles all user payouts
+ * - Manages fund consolidation
+ * 
+ * Schedule this trigger to run monthly (e.g., 1st of each month at 9 AM)
+ */
+function TRIGGER_makeMonthlyPayments() {
+  Logger.log('=== MONTHLY PAYMENTS TRIGGER ===');
+  Logger.log('[TRIGGER] Starting monthly payments...');
+  
+  try {
+    var startTime = new Date().getTime();
+    
+    // First, sync all bank data to ensure we have latest balances
+    Logger.log('[TRIGGER] Step 1: Syncing bank data...');
+    var syncResult = syncBanksData({
+      dryRun: false,
+      skipExpenses: false,
+      skipConsolidation: false,
+      skipPayoutReconciliation: false
+    });
+    
+    if (!syncResult.success) {
+      throw new Error('Bank data sync failed: ' + syncResult.error);
+    }
+    
+    // Then, process monthly payments
+    Logger.log('[TRIGGER] Step 2: Processing monthly payments...');
+    var paymentResult = payUsersForCurrentMonth();
+    
+    var duration = new Date().getTime() - startTime;
+    
+    Logger.log('[TRIGGER] Monthly payments completed in %s ms', duration);
+    Logger.log('[TRIGGER] Sync results: %s', JSON.stringify(syncResult, null, 2));
+    Logger.log('[TRIGGER] Payment results: %s', JSON.stringify(paymentResult, null, 2));
+    
+    return {
+      success: paymentResult.success,
+      message: 'Monthly payments completed',
+      duration: duration,
+      syncResults: syncResult,
+      paymentResults: paymentResult,
+      timestamp: nowStamp_()
+    };
+    
+  } catch (e) {
+    Logger.log('[ERROR] Monthly payments trigger failed: %s', e.message);
+    return {
+      success: false,
+      error: e.message,
+      timestamp: nowStamp_()
+    };
+  }
+}
+
 // Function to set correct proxy token
 function setProxyToken() {
   var props = PropertiesService.getScriptProperties();
@@ -4319,15 +4427,6 @@ function setProxyToken() {
 }
 
 // Minimal consolidation trigger
-function TRIGGER_consolidateUsdFundsToMainDailySimple() {
-  Logger.log('[SIMPLE_TRIGGER] Starting consolidation...');
-  try {
-    var result = consolidateUsdFundsToMain_({ dryRun: false });
-    Logger.log('[SIMPLE_TRIGGER] Result: %s', result ? 'Success' : 'Failed');
-  } catch (e) {
-    Logger.log('[SIMPLE_TRIGGER] Error: %s', e.message);
-  }
-}
 
 function TRIGGER_consolidateUsdFundsToMainDaily() {
   Logger.log('=== DAILY USD FUND CONSOLIDATION TRIGGER ===');
