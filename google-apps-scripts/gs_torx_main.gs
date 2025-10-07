@@ -3063,7 +3063,7 @@ function detectAndReconcilePayouts_(dryRun) {
   };
   
   try {
-    Logger.log('[PAYOUTS] Detecting payouts on non-Main USD accounts...');
+    Logger.log('[TRANSFERS] Detecting all incoming transfers on non-Main USD accounts...');
     
     // Check Mercury accounts
     try {
@@ -3089,26 +3089,26 @@ function detectAndReconcilePayouts_(dryRun) {
         
         if (balance > 0) {
           result.detected++;
-          Logger.log('[PAYOUTS] Detected Mercury payout: $%s USD on %s', balance, accountName);
+          Logger.log('[TRANSFERS] Detected Mercury transfer: $%s USD on %s (non-Main account)', balance, accountName);
           
           if (!dryRun) {
             try {
-              var reconciliationResult = reconcilePayoutWithSpreadsheet(balance, 'Mercury');
+              var reconciliationResult = reconcileTransferWithSpreadsheet(balance, 'Mercury', accountName);
               if (reconciliationResult.success) {
                 result.reconciled++;
-                Logger.log('[PAYOUTS] ✅ Mercury payout reconciled: %s', reconciliationResult.message);
+                Logger.log('[TRANSFERS] ✅ Mercury transfer reconciled: %s', reconciliationResult.message);
               } else {
-                Logger.log('[PAYOUTS] ⚠️ Mercury payout not reconciled: %s', reconciliationResult.error);
+                Logger.log('[TRANSFERS] ⚠️ Mercury transfer not reconciled: %s', reconciliationResult.error);
               }
             } catch (e) {
-              Logger.log('[ERROR] Mercury payout reconciliation failed: %s', e.message);
+              Logger.log('[ERROR] Mercury transfer reconciliation failed: %s', e.message);
               result.errors.push('Mercury reconciliation: ' + e.message);
             }
           }
         }
       }
     } catch (e) {
-      Logger.log('[ERROR] Mercury payout detection failed: %s', e.message);
+      Logger.log('[ERROR] Mercury transfer detection failed: %s', e.message);
       result.errors.push('Mercury detection: ' + e.message);
     }
     
@@ -3129,34 +3129,34 @@ function detectAndReconcilePayouts_(dryRun) {
         
         if (balance > 0) {
           result.detected++;
-          Logger.log('[PAYOUTS] Detected Revolut payout: $%s USD on %s', balance, accountName);
+          Logger.log('[TRANSFERS] Detected Revolut transfer: $%s USD on %s (non-Main account)', balance, accountName);
           
           if (!dryRun) {
             try {
-              var reconciliationResult = reconcilePayoutWithSpreadsheet(balance, 'Revolut');
+              var reconciliationResult = reconcileTransferWithSpreadsheet(balance, 'Revolut', accountName);
               if (reconciliationResult.success) {
                 result.reconciled++;
-                Logger.log('[PAYOUTS] ✅ Revolut payout reconciled: %s', reconciliationResult.message);
+                Logger.log('[TRANSFERS] ✅ Revolut transfer reconciled: %s', reconciliationResult.message);
               } else {
-                Logger.log('[PAYOUTS] ⚠️ Revolut payout not reconciled: %s', reconciliationResult.error);
+                Logger.log('[TRANSFERS] ⚠️ Revolut transfer not reconciled: %s', reconciliationResult.error);
               }
             } catch (e) {
-              Logger.log('[ERROR] Revolut payout reconciliation failed: %s', e.message);
+              Logger.log('[ERROR] Revolut transfer reconciliation failed: %s', e.message);
               result.errors.push('Revolut reconciliation: ' + e.message);
             }
           }
         }
       }
     } catch (e) {
-      Logger.log('[ERROR] Revolut payout detection failed: %s', e.message);
+      Logger.log('[ERROR] Revolut transfer detection failed: %s', e.message);
       result.errors.push('Revolut detection: ' + e.message);
     }
     
-    Logger.log('[PAYOUTS] Payout detection completed: %s detected, %s reconciled', result.detected, result.reconciled);
+    Logger.log('[TRANSFERS] Transfer detection completed: %s detected, %s reconciled', result.detected, result.reconciled);
     return result;
     
   } catch (e) {
-    Logger.log('[ERROR] Payout detection and reconciliation failed: %s', e.message);
+    Logger.log('[ERROR] Transfer detection and reconciliation failed: %s', e.message);
     result.status = 'error';
     result.errors.push(e.message);
     return result;
@@ -5038,6 +5038,119 @@ function debugMenuFunctions() {
   });
   
   ui.alert('Menu Functions Debug', message, ui.ButtonSet.OK);
+}
+
+function reconcileTransferWithSpreadsheet(receivedAmount, bankName, accountName) {
+  /*
+   * 🔄 RECONCILE ALL TRANSFERS WITH SPREADSHEET
+   * 
+   * This function reconciles ANY incoming transfer (not just payouts)
+   * with the Payouts sheet, marking them as "Received" in column H
+   * 
+   * @param {number} receivedAmount - Amount received
+   * @param {string} bankName - Bank name (Mercury/Revolut)
+   * @param {string} accountName - Account name where transfer was received
+   */
+  try {
+    Logger.log('[TRANSFER_RECONCILE] Reconciling transfer: $' + receivedAmount + ' from ' + bankName + ' (' + accountName + ')');
+    
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Payouts');
+    if (!sheet) {
+      Logger.log('[ERROR] Could not find Payouts sheet');
+      return { success: false, error: 'Payouts sheet not found' };
+    }
+    
+    // Get the data from A23 downwards (User, Platform, Account ID, Month, Day, Amount, Received)
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 23) {
+      Logger.log('[ERROR] No payout data found (sheet too short)');
+      return { success: false, error: 'No payout data found' };
+    }
+    
+    var payoutData = sheet.getRange(23, 1, lastRow - 22, 8).getValues();
+    Logger.log('[TRANSFER_RECONCILE] Checking ' + payoutData.length + ' payout entries...');
+    
+    var bestMatch = { row: -1, score: 0, adjustment: 0 };
+    
+    // Look for unmatched payouts that could match this received amount
+    for (var i = 0; i < payoutData.length; i++) {
+      var row = payoutData[i];
+      var platform = String(row[1] || '').trim(); // Column B (Platform)
+      var baseAmount = Number(row[5] || 0); // Column G (Amount)
+      var received = String(row[7] || '').trim().toLowerCase(); // Column H (Received)
+      
+      // Skip if already marked as received
+      if (received === 'received' || received === 'yes' || received === 'true') {
+        continue;
+      }
+      
+      // Skip if no base amount
+      if (baseAmount <= 0) {
+        continue;
+      }
+      
+      // Calculate expected amount based on platform
+      var expectedCalc = calculateExpectedPayoutAmount_(platform, baseAmount);
+      
+      // Check if received amount matches expected range
+      if (receivedAmount >= expectedCalc.min && receivedAmount <= expectedCalc.max) {
+        var score = 1 - Math.abs(receivedAmount - expectedCalc.expected) / expectedCalc.expected;
+        Logger.log('[TRANSFER_RECONCILE] Row ' + (i + 23) + ': Platform=' + platform + ', Base=$' + baseAmount + ', Expected=' + expectedCalc.expected + ', Score=' + score.toFixed(3));
+        
+        if (score > bestMatch.score) {
+          bestMatch = { 
+            row: i + 23, 
+            score: score, 
+            adjustment: receivedAmount - baseAmount,
+            platform: platform,
+            baseAmount: baseAmount
+          };
+        }
+      }
+    }
+    
+    // If we found a good match (score > 0.8), mark it as received
+    if (bestMatch.score > 0.8) {
+      var reconcileRow = bestMatch.row;
+      var adjustmentAmount = bestMatch.adjustment;
+      
+      // Mark as received
+      sheet.getRange(reconcileRow, 8).setValue('Received'); // Column H
+      
+      // Add adjustment note if needed
+      if (Math.abs(adjustmentAmount) > 10) { // Only note significant adjustments
+        var note = receivedAmount + ' received (base: ' + bestMatch.baseAmount + ', adjustment: ' + (adjustmentAmount >= 0 ? '+' : '') + adjustmentAmount.toFixed(2) + ')';
+        Logger.log('[TRANSFER_RECONCILE] Marked row ' + reconcileRow + ' as received: ' + note);
+        
+        return { 
+          success: true, 
+          matchedRow: reconcileRow,
+          adjustment: adjustmentAmount,
+          message: 'Reconciled with row ' + reconcileRow + ': ' + bestMatch.platform + ' transfer',
+          note: note
+        };
+      } else {
+        Logger.log('[TRANSFER_RECONCILE] Marked row ' + reconcileRow + ' as received: $' + receivedAmount);
+        return { 
+          success: true, 
+          matchedRow: reconcileRow,
+          adjustment: adjustmentAmount,
+          message: 'Reconciled with row ' + reconcileRow + ': ' + bestMatch.platform + ' transfer'
+        };
+      }
+    } else {
+      Logger.log('[TRANSFER_RECONCILE] No suitable match found for $' + receivedAmount + ' (best score: ' + bestMatch.score.toFixed(3) + ')');
+      return { 
+        success: false, 
+        error: 'No suitable match found for $' + receivedAmount + ' from ' + bankName + ' (' + accountName + ')',
+        bestScore: bestMatch.score
+      };
+    }
+    
+  } catch (e) {
+    Logger.log('[ERROR] Transfer reconciliation failed: %s', e.message);
+    return { success: false, error: e.message };
+  }
 }
 
 function reconcilePayoutWithSpreadsheet(receivedAmount, bankName) {
