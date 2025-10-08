@@ -1,0 +1,1358 @@
+{
+  "id": "ab824168-5557-436b-9478-0277beefd73b",
+  "request_id": null,
+  "source_id": "ab824168-5557-436b-9478-0277beefd73b",
+  "amount": -319.59,
+  "status": "PENDING",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_HOLD",
+  "description": null,
+  "created_at": "2025-08-30T08:53:20.070+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "59d62c81-d1a4-4508-8979-8df5e136a46d",
+  "request_id": null,
+  "source_id": "59d62c81-d1a4-4508-8979-8df5e136a46d",
+  "amount": -319.59,
+  "status": "PENDING",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_HOLD",
+  "description": null,
+  "created_at": "2025-08-30T08:51:53.970+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "8fe4df88-024c-4c37-9430-4cff5a8e0a8d",
+  "request_id": null,
+  "source_id": "8fe4df88-024c-4c37-9430-4cff5a8e0a8d",
+  "amount": -319.59,
+  "status": "PENDING",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_HOLD",
+  "description": null,
+  "created_at": "2025-08-30T08:50:36.395+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "4cbf9e2f-b5ce-4f3d-b476-e5acb39741cc",
+  "request_id": null,
+  "source_id": "4cbf9e2f-b5ce-4f3d-b476-e5acb39741cc",
+  "amount": -180.29,
+  "status": "SETTLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_CAPTURE",
+  "description": null,
+  "created_at": "2025-08-30T05:30:45.224+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "c239b696-f192-43da-89c0-cfd976ea833a",
+  "request_id": null,
+  "source_id": "c239b696-f192-43da-89c0-cfd976ea833a",
+  "amount": 180.29,
+  "status": "CANCELLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_RELEASE",
+  "description": null,
+  "created_at": "2025-08-30T05:30:45.224+00:00",
+  "isCardPurchase": true,
+  "isNegative": false
+}
+{
+  "id": "6dd3b71f-ddf3-4f56-906b-0b3e0150fa42",
+  "request_id": null,
+  "source_id": "6dd3b71f-ddf3-4f56-906b-0b3e0150fa42",
+  "amount": -180.29,
+  "status": "SETTLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_CAPTURE",
+  "description": null,
+  "created_at": "2025-08-30T05:30:45.215+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "d4e6b825-9d0e-4bb6-88f7-8e4e87bd541f",
+  "request_id": null,
+  "source_id": "d4e6b825-9d0e-4bb6-88f7-8e4e87bd541f",
+  "amount": 180.29,
+  "status": "CANCELLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_RELEASE",
+  "description": null,
+  "created_at": "2025-08-30T05:30:45.215+00:00",
+  "isCardPurchase": true,
+  "isNegative": false
+}
+{
+  "id": "b62b8190-666a-4e33-94aa-eb0f06c1d777",
+  "request_id": null,
+  "source_id": "b62b8190-666a-4e33-94aa-eb0f06c1d777",
+  "amount": 180.29,
+  "status": "CANCELLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_RELEASE",
+  "description": null,
+  "created_at": "2025-08-30T05:30:45.212+00:00",
+  "isCardPurchase": true,
+  "isNegative": false
+}
+{
+  "id": "5fbf6221-5a03-4700-8e6b-71ec4af23576",
+  "request_id": null,
+  "source_id": "5fbf6221-5a03-4700-8e6b-71ec4af23576",
+  "amount": -180.29,
+  "status": "SETTLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_CAPTURE",
+  "description": null,
+  "created_at": "2025-08-30T05:30:45.212+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "29ff5853-21b0-4b82-a429-d9993dc14ee1",
+  "request_id": null,
+  "source_id": "29ff5853-21b0-4b82-a429-d9993dc14ee1",
+  "amount": -180.29,
+  "status": "SETTLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_CAPTURE",
+  "description": null,
+  "created_at": "2025-08-30T05:30:45.209+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "a103ff43-d923-4ebd-bab2-682ad4317efd",
+  "request_id": null,
+  "source_id": "a103ff43-d923-4ebd-bab2-682ad4317efd",
+  "amount": 180.29,
+  "status": "CANCELLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_RELEASE",
+  "description": null,
+  "created_at": "2025-08-30T05:30:45.209+00:00",
+  "isCardPurchase": true,
+  "isNegative": false
+}
+{
+  "id": "b62b8190-666a-4e33-94aa-eb0f06c1d777",
+  "request_id": null,
+  "source_id": "b62b8190-666a-4e33-94aa-eb0f06c1d777",
+  "amount": -180.29,
+  "status": "PENDING",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_HOLD",
+  "description": null,
+  "created_at": "2025-08-29T16:00:53.839+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "a103ff43-d923-4ebd-bab2-682ad4317efd",
+  "request_id": null,
+  "source_id": "a103ff43-d923-4ebd-bab2-682ad4317efd",
+  "amount": -180.29,
+  "status": "PENDING",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_HOLD",
+  "description": null,
+  "created_at": "2025-08-29T16:00:17.851+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "d4e6b825-9d0e-4bb6-88f7-8e4e87bd541f",
+  "request_id": null,
+  "source_id": "d4e6b825-9d0e-4bb6-88f7-8e4e87bd541f",
+  "amount": -180.29,
+  "status": "PENDING",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_HOLD",
+  "description": null,
+  "created_at": "2025-08-29T15:59:03.506+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "c239b696-f192-43da-89c0-cfd976ea833a",
+  "request_id": null,
+  "source_id": "c239b696-f192-43da-89c0-cfd976ea833a",
+  "amount": -180.29,
+  "status": "PENDING",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_HOLD",
+  "description": null,
+  "created_at": "2025-08-29T15:58:28.744+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "5411c992-e6a2-4d19-97ff-16ca2ae0164c",
+  "request_id": null,
+  "source_id": "5411c992-e6a2-4d19-97ff-16ca2ae0164c",
+  "amount": 180.29,
+  "status": "CANCELLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_RELEASE",
+  "description": null,
+  "created_at": "2025-08-29T05:06:45.151+00:00",
+  "isCardPurchase": true,
+  "isNegative": false
+}
+{
+  "id": "a89d673f-70b1-4e0f-a90f-17d5ccc37289",
+  "request_id": null,
+  "source_id": "a89d673f-70b1-4e0f-a90f-17d5ccc37289",
+  "amount": -180.29,
+  "status": "SETTLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_CAPTURE",
+  "description": null,
+  "created_at": "2025-08-29T05:06:45.151+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "aa673819-e778-4909-9e0c-326e0a960f01",
+  "request_id": null,
+  "source_id": "aa673819-e778-4909-9e0c-326e0a960f01",
+  "amount": 180.29,
+  "status": "CANCELLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_RELEASE",
+  "description": null,
+  "created_at": "2025-08-29T05:06:45.141+00:00",
+  "isCardPurchase": true,
+  "isNegative": false
+}
+{
+  "id": "14603f78-459e-442c-b691-e1b240dcb51a",
+  "request_id": null,
+  "source_id": "14603f78-459e-442c-b691-e1b240dcb51a",
+  "amount": -180.29,
+  "status": "SETTLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_CAPTURE",
+  "description": null,
+  "created_at": "2025-08-29T05:06:45.141+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "5411c992-e6a2-4d19-97ff-16ca2ae0164c",
+  "request_id": null,
+  "source_id": "5411c992-e6a2-4d19-97ff-16ca2ae0164c",
+  "amount": -180.29,
+  "status": "PENDING",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_HOLD",
+  "description": null,
+  "created_at": "2025-08-28T13:25:41.574+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "aa673819-e778-4909-9e0c-326e0a960f01",
+  "request_id": null,
+  "source_id": "aa673819-e778-4909-9e0c-326e0a960f01",
+  "amount": -180.29,
+  "status": "PENDING",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_HOLD",
+  "description": null,
+  "created_at": "2025-08-28T10:44:05.420+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "1b28d699-0c3f-45c6-8561-7c2cddc925d1",
+  "request_id": null,
+  "source_id": "1b28d699-0c3f-45c6-8561-7c2cddc925d1",
+  "amount": -180.29,
+  "status": "SETTLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_CAPTURE",
+  "description": null,
+  "created_at": "2025-08-28T05:02:48.801+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "daed750a-549a-4d22-ab34-cca7b584ef85",
+  "request_id": null,
+  "source_id": "daed750a-549a-4d22-ab34-cca7b584ef85",
+  "amount": 180.29,
+  "status": "CANCELLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_RELEASE",
+  "description": null,
+  "created_at": "2025-08-28T05:02:48.801+00:00",
+  "isCardPurchase": true,
+  "isNegative": false
+}
+{
+  "id": "daed750a-549a-4d22-ab34-cca7b584ef85",
+  "request_id": null,
+  "source_id": "daed750a-549a-4d22-ab34-cca7b584ef85",
+  "amount": -180.29,
+  "status": "PENDING",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_HOLD",
+  "description": null,
+  "created_at": "2025-08-27T21:56:12.426+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "ftx_RzYoLMG7QKSUaj0UGdY8Rw",
+  "request_id": null,
+  "source_id": "4736282c-c1bb-40a4-946a-3d1419d63c47",
+  "amount": 4000,
+  "status": "SETTLED",
+  "source_type": "DEPOSIT",
+  "type": null,
+  "transaction_type": "DEPOSIT",
+  "description": "ws         ws",
+  "created_at": "2025-08-27T13:20:35.189+00:00",
+  "isCardPurchase": false,
+  "isNegative": false
+}
+{
+  "id": "a34238a0-68cd-44b9-9718-626ca6d675e3",
+  "request_id": null,
+  "source_id": "a34238a0-68cd-44b9-9718-626ca6d675e3",
+  "amount": 405.45,
+  "status": "CANCELLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_RELEASE",
+  "description": null,
+  "created_at": "2025-08-27T07:18:45.457+00:00",
+  "isCardPurchase": true,
+  "isNegative": false
+}
+{
+  "id": "33032ae9-2a39-4a3b-b3e8-4db6a7b688d3",
+  "request_id": null,
+  "source_id": "33032ae9-2a39-4a3b-b3e8-4db6a7b688d3",
+  "amount": -405.45,
+  "status": "SETTLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_CAPTURE",
+  "description": null,
+  "created_at": "2025-08-27T07:18:45.457+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "4cc1b793-81f4-4a6b-b434-ed6c6b204f31",
+  "request_id": null,
+  "source_id": "4cc1b793-81f4-4a6b-b434-ed6c6b204f31",
+  "amount": -319.59,
+  "status": "SETTLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_CAPTURE",
+  "description": null,
+  "created_at": "2025-08-27T07:18:45.165+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "0acd5edc-5770-4368-9538-7b28d285a58f",
+  "request_id": null,
+  "source_id": "0acd5edc-5770-4368-9538-7b28d285a58f",
+  "amount": 319.59,
+  "status": "CANCELLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_RELEASE",
+  "description": null,
+  "created_at": "2025-08-27T07:18:45.165+00:00",
+  "isCardPurchase": true,
+  "isNegative": false
+}
+{
+  "id": "4caef069-3702-4bb2-93a4-d000d470e9a8",
+  "request_id": null,
+  "source_id": "4caef069-3702-4bb2-93a4-d000d470e9a8",
+  "amount": 319.59,
+  "status": "CANCELLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_RELEASE",
+  "description": null,
+  "created_at": "2025-08-27T07:18:45.161+00:00",
+  "isCardPurchase": true,
+  "isNegative": false
+}
+{
+  "id": "8315f3bb-52d7-40cb-a8f8-8eb48349729f",
+  "request_id": null,
+  "source_id": "8315f3bb-52d7-40cb-a8f8-8eb48349729f",
+  "amount": -319.59,
+  "status": "SETTLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_CAPTURE",
+  "description": null,
+  "created_at": "2025-08-27T07:18:45.161+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "e2a0e8fe-47c1-445e-88b4-61436e7f1d01",
+  "request_id": null,
+  "source_id": "e2a0e8fe-47c1-445e-88b4-61436e7f1d01",
+  "amount": 319.59,
+  "status": "CANCELLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_RELEASE",
+  "description": null,
+  "created_at": "2025-08-27T07:18:45.159+00:00",
+  "isCardPurchase": true,
+  "isNegative": false
+}
+{
+  "id": "d1b9fd15-01a8-4e36-a3e5-e26d0f1c4a08",
+  "request_id": null,
+  "source_id": "d1b9fd15-01a8-4e36-a3e5-e26d0f1c4a08",
+  "amount": -319.59,
+  "status": "SETTLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_CAPTURE",
+  "description": null,
+  "created_at": "2025-08-27T07:18:45.159+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "a34238a0-68cd-44b9-9718-626ca6d675e3",
+  "request_id": null,
+  "source_id": "a34238a0-68cd-44b9-9718-626ca6d675e3",
+  "amount": -405.45,
+  "status": "PENDING",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_HOLD",
+  "description": null,
+  "created_at": "2025-08-27T00:00:54.385+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "4caef069-3702-4bb2-93a4-d000d470e9a8",
+  "request_id": null,
+  "source_id": "4caef069-3702-4bb2-93a4-d000d470e9a8",
+  "amount": -319.59,
+  "status": "PENDING",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_HOLD",
+  "description": null,
+  "created_at": "2025-08-26T16:23:19.446+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "e2a0e8fe-47c1-445e-88b4-61436e7f1d01",
+  "request_id": null,
+  "source_id": "e2a0e8fe-47c1-445e-88b4-61436e7f1d01",
+  "amount": -319.59,
+  "status": "PENDING",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_HOLD",
+  "description": null,
+  "created_at": "2025-08-26T16:20:12.438+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "0acd5edc-5770-4368-9538-7b28d285a58f",
+  "request_id": null,
+  "source_id": "0acd5edc-5770-4368-9538-7b28d285a58f",
+  "amount": -319.59,
+  "status": "PENDING",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_HOLD",
+  "description": null,
+  "created_at": "2025-08-26T16:16:42.488+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "9e516054-34d0-4ce1-bea9-054d05bf3340",
+  "request_id": null,
+  "source_id": "9e516054-34d0-4ce1-bea9-054d05bf3340",
+  "amount": 381.6,
+  "status": "CANCELLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_RELEASE",
+  "description": null,
+  "created_at": "2025-08-21T05:08:24.826+00:00",
+  "isCardPurchase": true,
+  "isNegative": false
+}
+{
+  "id": "78bfffb5-e956-439d-92a7-a858140c2340",
+  "request_id": null,
+  "source_id": "78bfffb5-e956-439d-92a7-a858140c2340",
+  "amount": -381.6,
+  "status": "SETTLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_CAPTURE",
+  "description": null,
+  "created_at": "2025-08-21T05:08:24.826+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "c0ebe615-c1b0-4d8b-9bf0-95cbed4a22b3",
+  "request_id": null,
+  "source_id": "c0ebe615-c1b0-4d8b-9bf0-95cbed4a22b3",
+  "amount": 381.6,
+  "status": "CANCELLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_RELEASE",
+  "description": null,
+  "created_at": "2025-08-21T05:08:24.727+00:00",
+  "isCardPurchase": true,
+  "isNegative": false
+}
+{
+  "id": "84fdf47c-0e1c-43f7-9bda-5d1e18c94579",
+  "request_id": null,
+  "source_id": "84fdf47c-0e1c-43f7-9bda-5d1e18c94579",
+  "amount": -381.6,
+  "status": "SETTLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_CAPTURE",
+  "description": null,
+  "created_at": "2025-08-21T05:08:24.727+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "a2a2bcf8-c589-4f23-8063-999d0b055c30",
+  "request_id": null,
+  "source_id": "a2a2bcf8-c589-4f23-8063-999d0b055c30",
+  "amount": 381.6,
+  "status": "CANCELLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_RELEASE",
+  "description": null,
+  "created_at": "2025-08-21T05:08:24.725+00:00",
+  "isCardPurchase": true,
+  "isNegative": false
+}
+{
+  "id": "11b50e10-3a9d-437d-b065-ae7a4c9c139e",
+  "request_id": null,
+  "source_id": "11b50e10-3a9d-437d-b065-ae7a4c9c139e",
+  "amount": -381.6,
+  "status": "SETTLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_CAPTURE",
+  "description": null,
+  "created_at": "2025-08-21T05:08:24.725+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "799c5bea-3f0b-4650-b2e2-c7e5421aba43",
+  "request_id": null,
+  "source_id": "799c5bea-3f0b-4650-b2e2-c7e5421aba43",
+  "amount": 381.6,
+  "status": "CANCELLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_RELEASE",
+  "description": null,
+  "created_at": "2025-08-21T05:07:26.186+00:00",
+  "isCardPurchase": true,
+  "isNegative": false
+}
+{
+  "id": "4a794442-3728-45c8-a086-72a476690828",
+  "request_id": null,
+  "source_id": "4a794442-3728-45c8-a086-72a476690828",
+  "amount": -381.6,
+  "status": "SETTLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_CAPTURE",
+  "description": null,
+  "created_at": "2025-08-21T05:07:26.186+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "7a274362-479d-4ff4-b1b7-89237a5581cb",
+  "request_id": null,
+  "source_id": "7a274362-479d-4ff4-b1b7-89237a5581cb",
+  "amount": -381.6,
+  "status": "SETTLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_CAPTURE",
+  "description": null,
+  "created_at": "2025-08-21T05:07:26.179+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "09204358-8cf3-4e44-be8a-ef902ec15849",
+  "request_id": null,
+  "source_id": "09204358-8cf3-4e44-be8a-ef902ec15849",
+  "amount": 381.6,
+  "status": "CANCELLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_RELEASE",
+  "description": null,
+  "created_at": "2025-08-21T05:07:26.179+00:00",
+  "isCardPurchase": true,
+  "isNegative": false
+}
+{
+  "id": "8235aa52-3d5f-47a6-89a6-673d90c1abb7",
+  "request_id": null,
+  "source_id": "8235aa52-3d5f-47a6-89a6-673d90c1abb7",
+  "amount": -381.6,
+  "status": "SETTLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_CAPTURE",
+  "description": null,
+  "created_at": "2025-08-21T05:07:26.178+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "fdb39212-3978-45b9-b60a-e5d9b06799ff",
+  "request_id": null,
+  "source_id": "fdb39212-3978-45b9-b60a-e5d9b06799ff",
+  "amount": 381.6,
+  "status": "CANCELLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_RELEASE",
+  "description": null,
+  "created_at": "2025-08-21T05:07:26.178+00:00",
+  "isCardPurchase": true,
+  "isNegative": false
+}
+{
+  "id": "09204358-8cf3-4e44-be8a-ef902ec15849",
+  "request_id": null,
+  "source_id": "09204358-8cf3-4e44-be8a-ef902ec15849",
+  "amount": -381.6,
+  "status": "PENDING",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_HOLD",
+  "description": null,
+  "created_at": "2025-08-20T19:18:12.947+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "fdb39212-3978-45b9-b60a-e5d9b06799ff",
+  "request_id": null,
+  "source_id": "fdb39212-3978-45b9-b60a-e5d9b06799ff",
+  "amount": -381.6,
+  "status": "PENDING",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_HOLD",
+  "description": null,
+  "created_at": "2025-08-20T19:17:10.423+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "799c5bea-3f0b-4650-b2e2-c7e5421aba43",
+  "request_id": null,
+  "source_id": "799c5bea-3f0b-4650-b2e2-c7e5421aba43",
+  "amount": -381.6,
+  "status": "PENDING",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_HOLD",
+  "description": null,
+  "created_at": "2025-08-20T19:16:07.457+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "9e516054-34d0-4ce1-bea9-054d05bf3340",
+  "request_id": null,
+  "source_id": "9e516054-34d0-4ce1-bea9-054d05bf3340",
+  "amount": -381.6,
+  "status": "PENDING",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_HOLD",
+  "description": null,
+  "created_at": "2025-08-20T18:57:27.058+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "a2a2bcf8-c589-4f23-8063-999d0b055c30",
+  "request_id": null,
+  "source_id": "a2a2bcf8-c589-4f23-8063-999d0b055c30",
+  "amount": -381.6,
+  "status": "PENDING",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_HOLD",
+  "description": null,
+  "created_at": "2025-08-20T18:56:13.078+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "c0ebe615-c1b0-4d8b-9bf0-95cbed4a22b3",
+  "request_id": null,
+  "source_id": "c0ebe615-c1b0-4d8b-9bf0-95cbed4a22b3",
+  "amount": -381.6,
+  "status": "PENDING",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_HOLD",
+  "description": null,
+  "created_at": "2025-08-20T18:54:24.717+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "ftx_7PIym8tfSlmvRbx2lNM8vg",
+  "request_id": null,
+  "source_id": "ecf2329b-cb5f-4a59-af45-bc7694d33cbe",
+  "amount": 3000,
+  "status": "SETTLED",
+  "source_type": "DEPOSIT",
+  "type": null,
+  "transaction_type": "DEPOSIT",
+  "description": "ws         ws",
+  "created_at": "2025-08-20T13:05:33.025+00:00",
+  "isCardPurchase": false,
+  "isNegative": false
+}
+{
+  "id": "dbd89026-ec66-4265-b8b5-0337aa3477ce",
+  "request_id": null,
+  "source_id": "dbd89026-ec66-4265-b8b5-0337aa3477ce",
+  "amount": -180.29,
+  "status": "SETTLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_CAPTURE",
+  "description": null,
+  "created_at": "2025-08-19T13:32:18.170+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "8df6ffc4-8a35-40ea-8e2c-45f7effbf857",
+  "request_id": null,
+  "source_id": "8df6ffc4-8a35-40ea-8e2c-45f7effbf857",
+  "amount": 180.29,
+  "status": "CANCELLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_RELEASE",
+  "description": null,
+  "created_at": "2025-08-19T13:32:18.170+00:00",
+  "isCardPurchase": true,
+  "isNegative": false
+}
+{
+  "id": "8df6ffc4-8a35-40ea-8e2c-45f7effbf857",
+  "request_id": null,
+  "source_id": "8df6ffc4-8a35-40ea-8e2c-45f7effbf857",
+  "amount": -180.29,
+  "status": "PENDING",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_HOLD",
+  "description": null,
+  "created_at": "2025-08-19T09:18:13.475+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "e777275a-652a-4cb8-93c5-e3f6636bbd3b",
+  "request_id": null,
+  "source_id": "e777275a-652a-4cb8-93c5-e3f6636bbd3b",
+  "amount": 180.29,
+  "status": "CANCELLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_RELEASE",
+  "description": null,
+  "created_at": "2025-08-18T07:34:28.179+00:00",
+  "isCardPurchase": true,
+  "isNegative": false
+}
+{
+  "id": "fddf0463-9e47-4324-ac89-765503486bae",
+  "request_id": null,
+  "source_id": "fddf0463-9e47-4324-ac89-765503486bae",
+  "amount": -180.29,
+  "status": "SETTLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_CAPTURE",
+  "description": null,
+  "created_at": "2025-08-18T07:34:28.179+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "e777275a-652a-4cb8-93c5-e3f6636bbd3b",
+  "request_id": null,
+  "source_id": "e777275a-652a-4cb8-93c5-e3f6636bbd3b",
+  "amount": -180.29,
+  "status": "PENDING",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_HOLD",
+  "description": null,
+  "created_at": "2025-08-17T22:23:13.372+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "c347ab5a-4d7f-47d5-a644-de8580536ddd",
+  "request_id": null,
+  "source_id": "c347ab5a-4d7f-47d5-a644-de8580536ddd",
+  "amount": 405.45,
+  "status": "CANCELLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_RELEASE",
+  "description": null,
+  "created_at": "2025-08-15T16:17:35.162+00:00",
+  "isCardPurchase": true,
+  "isNegative": false
+}
+{
+  "id": "697830ab-e926-4cd1-8ee4-4a3ced5d0688",
+  "request_id": null,
+  "source_id": "697830ab-e926-4cd1-8ee4-4a3ced5d0688",
+  "amount": -405.45,
+  "status": "SETTLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_CAPTURE",
+  "description": null,
+  "created_at": "2025-08-15T16:17:35.162+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "a039f80e-ea92-42fc-b165-d30a9a3b1266",
+  "request_id": null,
+  "source_id": "a039f80e-ea92-42fc-b165-d30a9a3b1266",
+  "amount": 405.45,
+  "status": "CANCELLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_RELEASE",
+  "description": null,
+  "created_at": "2025-08-15T13:53:35.997+00:00",
+  "isCardPurchase": true,
+  "isNegative": false
+}
+{
+  "id": "2ee0f2be-effc-475b-8817-d6357ae3a3dc",
+  "request_id": null,
+  "source_id": "2ee0f2be-effc-475b-8817-d6357ae3a3dc",
+  "amount": -405.45,
+  "status": "SETTLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_CAPTURE",
+  "description": null,
+  "created_at": "2025-08-15T13:53:35.997+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "c347ab5a-4d7f-47d5-a644-de8580536ddd",
+  "request_id": null,
+  "source_id": "c347ab5a-4d7f-47d5-a644-de8580536ddd",
+  "amount": -405.45,
+  "status": "PENDING",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_HOLD",
+  "description": null,
+  "created_at": "2025-08-15T13:50:23.583+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "a039f80e-ea92-42fc-b165-d30a9a3b1266",
+  "request_id": null,
+  "source_id": "a039f80e-ea92-42fc-b165-d30a9a3b1266",
+  "amount": -405.45,
+  "status": "PENDING",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_HOLD",
+  "description": null,
+  "created_at": "2025-08-15T08:23:46.088+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "c34b94ab-c0d7-4de7-867c-ff916d141aae",
+  "request_id": null,
+  "source_id": "c34b94ab-c0d7-4de7-867c-ff916d141aae",
+  "amount": 180.29,
+  "status": "CANCELLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_RELEASE",
+  "description": null,
+  "created_at": "2025-08-14T07:30:28.465+00:00",
+  "isCardPurchase": true,
+  "isNegative": false
+}
+{
+  "id": "30be3fc2-3331-458d-a879-9962d2ead3a0",
+  "request_id": null,
+  "source_id": "30be3fc2-3331-458d-a879-9962d2ead3a0",
+  "amount": -180.29,
+  "status": "SETTLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_CAPTURE",
+  "description": null,
+  "created_at": "2025-08-14T07:30:28.465+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "1fb25ae6-b35a-4d1a-b0ab-bc42f2e452d8",
+  "request_id": null,
+  "source_id": "1fb25ae6-b35a-4d1a-b0ab-bc42f2e452d8",
+  "amount": -180.29,
+  "status": "SETTLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_CAPTURE",
+  "description": null,
+  "created_at": "2025-08-14T00:58:32.385+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "1a45698a-1318-4329-ab04-929dd2890695",
+  "request_id": null,
+  "source_id": "1a45698a-1318-4329-ab04-929dd2890695",
+  "amount": 180.29,
+  "status": "CANCELLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_RELEASE",
+  "description": null,
+  "created_at": "2025-08-14T00:58:32.385+00:00",
+  "isCardPurchase": true,
+  "isNegative": false
+}
+{
+  "id": "297aed50-82c8-4be4-926e-23e2b6d9ecef",
+  "request_id": null,
+  "source_id": "297aed50-82c8-4be4-926e-23e2b6d9ecef",
+  "amount": 405.45,
+  "status": "CANCELLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_RELEASE",
+  "description": null,
+  "created_at": "2025-08-13T16:38:08.146+00:00",
+  "isCardPurchase": true,
+  "isNegative": false
+}
+{
+  "id": "7293c223-4a3e-4dda-bf14-fc6e545c9f29",
+  "request_id": null,
+  "source_id": "7293c223-4a3e-4dda-bf14-fc6e545c9f29",
+  "amount": -405.45,
+  "status": "SETTLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_CAPTURE",
+  "description": null,
+  "created_at": "2025-08-13T16:38:08.146+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "1a45698a-1318-4329-ab04-929dd2890695",
+  "request_id": null,
+  "source_id": "1a45698a-1318-4329-ab04-929dd2890695",
+  "amount": -180.29,
+  "status": "PENDING",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_HOLD",
+  "description": null,
+  "created_at": "2025-08-13T15:39:07.225+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "297aed50-82c8-4be4-926e-23e2b6d9ecef",
+  "request_id": null,
+  "source_id": "297aed50-82c8-4be4-926e-23e2b6d9ecef",
+  "amount": -405.45,
+  "status": "PENDING",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_HOLD",
+  "description": null,
+  "created_at": "2025-08-13T14:48:50.779+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "ftx_S_bgFoT7R9-oYZ71dJKp_g",
+  "request_id": null,
+  "source_id": "4bf6e016-84fb-47df-a861-9ef57492a9fe",
+  "amount": 2000,
+  "status": "SETTLED",
+  "source_type": "DEPOSIT",
+  "type": null,
+  "transaction_type": "DEPOSIT",
+  "description": "ws",
+  "created_at": "2025-08-13T13:20:30.881+00:00",
+  "isCardPurchase": false,
+  "isNegative": false
+}
+{
+  "id": "c34b94ab-c0d7-4de7-867c-ff916d141aae",
+  "request_id": null,
+  "source_id": "c34b94ab-c0d7-4de7-867c-ff916d141aae",
+  "amount": -180.29,
+  "status": "PENDING",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_HOLD",
+  "description": null,
+  "created_at": "2025-08-13T08:26:54.576+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "4d4b6168-8397-4024-a802-5fc047931f58",
+  "request_id": null,
+  "source_id": "4d4b6168-8397-4024-a802-5fc047931f58",
+  "amount": 180.29,
+  "status": "CANCELLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_RELEASE",
+  "description": null,
+  "created_at": "2025-08-06T09:22:45.202+00:00",
+  "isCardPurchase": true,
+  "isNegative": false
+}
+{
+  "id": "95ae6a06-f6cc-494c-85fd-edd2edb149eb",
+  "request_id": null,
+  "source_id": "95ae6a06-f6cc-494c-85fd-edd2edb149eb",
+  "amount": -180.29,
+  "status": "SETTLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_CAPTURE",
+  "description": null,
+  "created_at": "2025-08-06T09:22:45.202+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "4d4b6168-8397-4024-a802-5fc047931f58",
+  "request_id": null,
+  "source_id": "4d4b6168-8397-4024-a802-5fc047931f58",
+  "amount": -180.29,
+  "status": "PENDING",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_HOLD",
+  "description": null,
+  "created_at": "2025-08-06T08:16:01.885+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "c104ac59-f45a-4db6-b06d-ff17d9c7695f",
+  "request_id": null,
+  "source_id": "c104ac59-f45a-4db6-b06d-ff17d9c7695f",
+  "amount": 180.29,
+  "status": "CANCELLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_RELEASE",
+  "description": null,
+  "created_at": "2025-08-06T04:02:44.160+00:00",
+  "isCardPurchase": true,
+  "isNegative": false
+}
+{
+  "id": "8598699f-2ed2-4c77-9a19-53885e741037",
+  "request_id": null,
+  "source_id": "8598699f-2ed2-4c77-9a19-53885e741037",
+  "amount": -180.29,
+  "status": "SETTLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_CAPTURE",
+  "description": null,
+  "created_at": "2025-08-06T04:02:44.160+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "c104ac59-f45a-4db6-b06d-ff17d9c7695f",
+  "request_id": null,
+  "source_id": "c104ac59-f45a-4db6-b06d-ff17d9c7695f",
+  "amount": -180.29,
+  "status": "PENDING",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_HOLD",
+  "description": null,
+  "created_at": "2025-08-05T22:05:10.618+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "ftx_ZJ4a8DbmRLKTkTqNmK6xOQ",
+  "request_id": null,
+  "source_id": "649e1af0-36e6-44b2-9391-3a8d98aeb139",
+  "amount": 1000,
+  "status": "SETTLED",
+  "source_type": "DEPOSIT",
+  "type": null,
+  "transaction_type": "DEPOSIT",
+  "description": "MercuryACH From WARESOUL LLC via mercury.com",
+  "created_at": "2025-08-04T16:20:41.810+00:00",
+  "isCardPurchase": false,
+  "isNegative": false
+}
+{
+  "id": "87f31ddb-3440-494e-a7cd-db624f96d94d",
+  "request_id": null,
+  "source_id": "87f31ddb-3440-494e-a7cd-db624f96d94d",
+  "amount": -180.29,
+  "status": "SETTLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_CAPTURE",
+  "description": null,
+  "created_at": "2025-08-04T04:12:38.176+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "bb7c8a9c-4512-45c0-84a8-80700d9074bc",
+  "request_id": null,
+  "source_id": "bb7c8a9c-4512-45c0-84a8-80700d9074bc",
+  "amount": 180.29,
+  "status": "CANCELLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_RELEASE",
+  "description": null,
+  "created_at": "2025-08-04T04:12:38.176+00:00",
+  "isCardPurchase": true,
+  "isNegative": false
+}
+{
+  "id": "bb7c8a9c-4512-45c0-84a8-80700d9074bc",
+  "request_id": null,
+  "source_id": "bb7c8a9c-4512-45c0-84a8-80700d9074bc",
+  "amount": -180.29,
+  "status": "PENDING",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_HOLD",
+  "description": null,
+  "created_at": "2025-08-03T22:13:32.176+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "057caa5f-e1ee-4146-babd-30bd29325d3b",
+  "request_id": null,
+  "source_id": "057caa5f-e1ee-4146-babd-30bd29325d3b",
+  "amount": -180.29,
+  "status": "SETTLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_CAPTURE",
+  "description": null,
+  "created_at": "2025-08-02T05:08:38.200+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "9575a4af-0429-4d74-9706-cae5356e145e",
+  "request_id": null,
+  "source_id": "9575a4af-0429-4d74-9706-cae5356e145e",
+  "amount": 180.29,
+  "status": "CANCELLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_RELEASE",
+  "description": null,
+  "created_at": "2025-08-02T05:08:38.200+00:00",
+  "isCardPurchase": true,
+  "isNegative": false
+}
+{
+  "id": "47af3f0a-89cb-432f-950e-3e4cfde63d52",
+  "request_id": null,
+  "source_id": "47af3f0a-89cb-432f-950e-3e4cfde63d52",
+  "amount": 405.45,
+  "status": "CANCELLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_RELEASE",
+  "description": null,
+  "created_at": "2025-08-01T19:09:22.382+00:00",
+  "isCardPurchase": true,
+  "isNegative": false
+}
+{
+  "id": "b1d0ab4b-8e58-4783-8e33-c925de326037",
+  "request_id": null,
+  "source_id": "b1d0ab4b-8e58-4783-8e33-c925de326037",
+  "amount": -405.45,
+  "status": "SETTLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_CAPTURE",
+  "description": null,
+  "created_at": "2025-08-01T19:09:22.382+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "9575a4af-0429-4d74-9706-cae5356e145e",
+  "request_id": null,
+  "source_id": "9575a4af-0429-4d74-9706-cae5356e145e",
+  "amount": -180.29,
+  "status": "PENDING",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_HOLD",
+  "description": null,
+  "created_at": "2025-08-01T10:50:48.371+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "47af3f0a-89cb-432f-950e-3e4cfde63d52",
+  "request_id": null,
+  "source_id": "47af3f0a-89cb-432f-950e-3e4cfde63d52",
+  "amount": -405.45,
+  "status": "PENDING",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_HOLD",
+  "description": null,
+  "created_at": "2025-08-01T10:46:41.269+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "88d9c198-185a-4218-9d48-84dbd5e1d312",
+  "request_id": null,
+  "source_id": "88d9c198-185a-4218-9d48-84dbd5e1d312",
+  "amount": 180.29,
+  "status": "CANCELLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_RELEASE",
+  "description": null,
+  "created_at": "2025-08-01T07:28:38.251+00:00",
+  "isCardPurchase": true,
+  "isNegative": false
+}
+{
+  "id": "b06fa990-4f69-4d77-be73-85426be45f6c",
+  "request_id": null,
+  "source_id": "b06fa990-4f69-4d77-be73-85426be45f6c",
+  "amount": -180.29,
+  "status": "SETTLED",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_CAPTURE",
+  "description": null,
+  "created_at": "2025-08-01T07:28:38.251+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}
+{
+  "id": "88d9c198-185a-4218-9d48-84dbd5e1d312",
+  "request_id": null,
+  "source_id": "88d9c198-185a-4218-9d48-84dbd5e1d312",
+  "amount": -180.29,
+  "status": "PENDING",
+  "source_type": "CARD_PURCHASE",
+  "type": null,
+  "transaction_type": "ISSUING_AUTHORISATION_HOLD",
+  "description": null,
+  "created_at": "2025-08-01T00:08:06.428+00:00",
+  "isCardPurchase": true,
+  "isNegative": true
+}

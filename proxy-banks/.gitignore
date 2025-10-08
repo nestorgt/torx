@@ -1,5 +1,4 @@
 # Environment and Configuration Files
-.env
 .env.local
 .env.production
 .env.staging

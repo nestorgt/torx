@@ -648,7 +648,6 @@ function revolutTransferBetweenAccounts_(fromName, toName, currency, amount, ref
   Logger.log('[REVOLUT] Transfer payload: %s', JSON.stringify(body, null, 2));
   return httpProxyPostJson_('/revolut/transfer', body);
 }
-
 function getRevolutTransactions_(month, year) {
   Logger.log('[REVOLUT] Getting transactions for %s-%s', month, year);
   try {
@@ -793,7 +792,6 @@ function getMercuryAccounts_() {
     return []; // Return empty array instead of throwing error
   }
 }
-
 function getMercuryAccountBalance_(accountId, currency) {
   try {
     Logger.log('[MERCURY] Getting balance for account %s with currency %s', accountId, currency);
@@ -885,192 +883,15 @@ function fetchWiseSummary_() {
 
 function fetchAirwallexSummary_() {
   try {
-    Logger.log('[AIRWALLEX] Fetching summary directly from API');
-    
-    // Get credentials from script properties
-    var clientId = getProp_('AIRWALLEX_CLIENT_ID');
-    var clientSecret = getProp_('AIRWALLEX_CLIENT_SECRET');
-    
-    if (!clientId || !clientSecret) {
-      Logger.log('[AIRWALLEX] Missing credentials - skipping summary');
-      return { USD: 0, EUR: 0, count: 0 };
-    }
-    
-    // Step 1: Authenticate
-    var authResult = airwallexAuthenticate_(clientId, clientSecret);
-    if (!authResult.success || !authResult.token) {
-      Logger.log('[AIRWALLEX] Authentication failed: %s', authResult.error);
-      return { USD: 0, EUR: 0, count: 0 };
-    }
-    
-    // Step 2: Get balances
-    var balances = airwallexGetBalances_(authResult.token);
-    
-    // Step 3: Format response
-    var summary = {
-      USD: 0,
-      EUR: 0,
-      count: balances.length
-    };
-    
-    for (var i = 0; i < balances.length; i++) {
-      var balance = balances[i];
-      var currency = balance.currency;
-      var amount = parseFloat(balance.amount) || 0;
-      
-      if (currency === 'USD') {
-        summary.USD += amount;
-      } else if (currency === 'EUR') {
-        summary.EUR += amount;
-      }
-    }
-    
-    Logger.log('[AIRWALLEX] Summary: %s USD, %s EUR, %s accounts', summary.USD, summary.EUR, summary.count);
-    return summary;
-    
+    Logger.log('[AIRWALLEX] Fetching summary via proxy server');
+    return httpProxyJson_('/airwallex/summary');
   } catch (e) {
     Logger.log('[ERROR] Failed to get Airwallex summary: %s', e.message);
     return { USD: 0, EUR: 0, count: 0 };
   }
 }
 
-function airwallexAuthenticate_(clientId, clientSecret) {
-  try {
-    Logger.log('[AIRWALLEX] Attempting authentication with client ID: %s', clientId.substring(0, 8) + '...');
-    
-    var authUrl = 'https://api.airwallex.com/api/v1/authentication/login';
-    
-    // Airwallex requires credentials in headers, not body
-    var options = {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-client-id': clientId,
-        'x-api-key': clientSecret
-      },
-      payload: JSON.stringify({}), // Empty body as per Airwallex spec
-      muteHttpExceptions: true
-    };
-    
-    var response = UrlFetchApp.fetch(authUrl, options);
-    var statusCode = response.getResponseCode();
-    var responseText = response.getContentText();
-    
-    Logger.log('[AIRWALLEX] Auth response status: %s', statusCode);
-    Logger.log('[AIRWALLEX] Auth response: %s', responseText);
-    
-    if (statusCode !== 201) {
-      return {
-        success: false,
-        error: 'Authentication failed with status ' + statusCode + ': ' + responseText
-      };
-    }
-    
-    var authData = JSON.parse(responseText);
-    if (!authData.token) {
-      return {
-        success: false,
-        error: 'No token in auth response: ' + responseText
-      };
-    }
-    
-    Logger.log('[AIRWALLEX] ✅ Authentication successful (using header-based auth)');
-    
-    // Cache token for future use (optional)
-    setProp_('AIRWALLEX_TOKEN_TIMESTAMP', new Date().getTime().toString());
-    setProp_('AIRWALLEX_TOKEN', authData.token);
-    
-    return {
-      success: true,
-      token: authData.token
-    };
-    
-  } catch (e) {
-    Logger.log('[ERROR] Airwallex authentication error: %s', e.message);
-    return {
-      success: false,
-      error: e.message
-    };
-  }
-}
-
-function airwallexGetBalances_(token) {
-  try {
-    Logger.log('[AIRWALLEX] Fetching account balances');
-    
-    var balancesUrl = 'https://api.airwallex.com/api/v1/accounts';
-    var options = {
-      method: 'GET',
-      headers: {
-        'Authorization': 'Bearer ' + token,
-        'Accept': 'application/json'
-      },
-      muteHttpExceptions: true
-    };
-    
-    var response = UrlFetchApp.fetch(balancesUrl, options);
-    var statusCode = response.getResponseCode();
-    var responseText = response.getContentText();
-    
-    Logger.log('[AIRWALLEX] Balances response status: %s', statusCode);
-    Logger.log('[AIRWALLEX] Balances response: %s', responseText);
-    
-    if (statusCode !== 200) {
-      throw new Error('Failed to fetch balances with status ' + statusCode + ': ' + responseText);
-    }
-    
-    var balancesData = JSON.parse(responseText);
-    var balances = balancesData.data || [];
-    
-    Logger.log('[AIRWALLEX] Found %s accounts', balances.length);
-    
-    // Get current balances for each account
-    var currentBalances = [];
-    
-    for (var i = 0; i < balances.length; i++) {
-      try {
-        var account = balances[i];
-        if (!account.id) continue;
-        
-        var balanceUrl = 'https://api.airwallex.com/api/v1/balances/current?account_id=' + account.id;
-        var balanceOptions = {
-          method: 'GET',
-          headers: {
-            'Authorization': 'Bearer ' + token,
-            'Accept': 'application/json'
-          },
-          muteHttpExceptions: true
-        };
-        
-        var balanceResponse = UrlFetchApp.fetch(balanceUrl, balanceOptions);
-        var balanceStatus = balanceResponse.getResponseCode();
-        var balanceText = balanceResponse.getContentText();
-        
-        if (balanceStatus === 200) {
-          var accountBalances = JSON.parse(balanceText);
-          if (Array.isArray(accountBalances)) {
-            currentBalances = currentBalances.concat(accountBalances);
-          }
-        } else {
-          Logger.log('[AIRWALLEX] Failed to get balance for account %s: %s', account.id, balanceText);
-        }
-        
-        // Small delay to avoid rate limiting
-        Utilities.sleep(100);
-        
-      } catch (e) {
-        Logger.log('[ERROR] Failed to get balance for account %s: %s', balances[i].id, e.message);
-      }
-    }
-    
-    Logger.log('[AIRWALLEX] ✅ Retrieved %s balance entries', currentBalances.length);
-    return currentBalances;
-    
-  } catch (e) {
-    Logger.log('[ERROR] Failed to fetch Airwallex balances: %s', e.message);
-    return [];
-  }
-}
+// Airwallex direct API functions removed - now using proxy server exclusively
 
 function fetchNexoSummary_() { 
   return httpProxyJson_('/nexo/summary'); 
@@ -1078,193 +899,316 @@ function fetchNexoSummary_() {
 
 /* ============== Monthly Expense Calculation Functions ============== */
 
+/**
+ * 📊 Calculate total expenses for a specific month
+ * @param {number} month - Month (1-12)
+ * @param {number} year - Year (2025+)
+ * @returns {Object} Expense breakdown by bank and total
+ */
+function calculateMonthlyExpensesTotal(month, year) {
+  Logger.log('=== CALCULATING MONTHLY EXPENSES TOTAL ===');
+  Logger.log('[EXPENSES] Month: %s, Year: %s', month, year);
+  
+  // Validate parameters
+  if (!month || !year) {
+    throw new Error('Month and year parameters are required');
+  }
+  if (month < 1 || month > 12) {
+    throw new Error('Month must be between 1 and 12');
+  }
+  if (year < 2025) {
+    throw new Error('Year must be 2025 or later');
+  }
+  
+  var result = {
+    month: month,
+    year: year,
+    monthStr: month.toString().padStart(2, '0') + '-' + year,
+    totalExpenses: 0,
+    breakdown: {
+      mercury: { cardExpenses: 0, transfersOut: 0, transfersIn: 0, total: 0 },
+      airwallex: { cardExpenses: 0, transfersOut: 0, transfersIn: 0, total: 0 },
+      revolut: { cardExpenses: 0, transfersOut: 0, transfersIn: 0, total: 0 },
+      revolutToNestor: { transfers: 0, total: 0 }
+    },
+    details: {
+      mercury: null,
+      airwallex: null,
+      revolut: null,
+      revolutToNestor: []
+    },
+    errors: []
+  };
+  
+  // ===== MERCURY =====
+  try {
+    Logger.log('[MERCURY] Fetching expenses for %s-%s', month, year);
+    var me = fetchMercuryExpenses_(month, year);
+    result.breakdown.mercury.cardExpenses = Number(me.cardExpenses || 0);
+    result.breakdown.mercury.transfersOut = Number(me.transfersOut || 0);
+    result.breakdown.mercury.transfersIn = Number(me.transfersIn || 0);
+    result.breakdown.mercury.total = result.breakdown.mercury.cardExpenses + result.breakdown.mercury.transfersOut;
+    result.details.mercury = me;
+    result.totalExpenses += result.breakdown.mercury.total;
+    Logger.log('[MERCURY] %s-%s: Cards $%s, TransfersOut $%s, Total $%s', 
+      month, year, result.breakdown.mercury.cardExpenses, result.breakdown.mercury.transfersOut, result.breakdown.mercury.total);
+  } catch(e) {
+    Logger.log('[ERROR] Mercury expenses %s-%s: %s', month, year, e.message);
+    result.errors.push('Mercury: ' + e.message);
+  }
+  
+  // ===== AIRWALLEX =====
+  try {
+    Logger.log('[AIRWALLEX] Fetching expenses for %s-%s', month, year);
+    var ae = fetchAirwallexExpenses_(month, year);
+    result.breakdown.airwallex.cardExpenses = Number(ae.cardExpenses || 0);
+    result.breakdown.airwallex.transfersOut = Number(ae.waresoulTransfersOut || 0) + Number(ae.nestorTransfersOut || 0) + Number(ae.otherTransfersOut || 0);
+    result.breakdown.airwallex.transfersIn = Number(ae.waresoulTransfersIn || 0) + Number(ae.nestorTransfersIn || 0) + Number(ae.otherTransfersIn || 0);
+    result.breakdown.airwallex.total = result.breakdown.airwallex.cardExpenses + result.breakdown.airwallex.transfersOut;
+    result.details.airwallex = ae;
+    result.totalExpenses += result.breakdown.airwallex.total;
+    Logger.log('[AIRWALLEX] %s-%s: Cards $%s, TransfersOut $%s, Total $%s', 
+      month, year, result.breakdown.airwallex.cardExpenses, result.breakdown.airwallex.transfersOut, result.breakdown.airwallex.total);
+  } catch(e) {
+    Logger.log('[ERROR] Airwallex expenses %s-%s: %s', month, year, e.message);
+    result.errors.push('Airwallex: ' + e.message);
+  }
+  
+  // ===== REVOLUT =====
+  try {
+    Logger.log('[REVOLUT] Fetching expenses for %s-%s', month, year);
+    var re = fetchRevolutExpenses_(month, year);
+    result.breakdown.revolut.cardExpenses = Number(re.cardExpenses || 0);
+    result.breakdown.revolut.transfersOut = Number(re.transfersOut || 0);
+    result.breakdown.revolut.transfersIn = Number(re.transfersIn || 0);
+    result.breakdown.revolut.total = result.breakdown.revolut.cardExpenses + result.breakdown.revolut.transfersOut;
+    result.details.revolut = re;
+    result.totalExpenses += result.breakdown.revolut.total;
+    Logger.log('[REVOLUT] %s-%s: Cards $%s, TransfersOut $%s, Total $%s', 
+      month, year, result.breakdown.revolut.cardExpenses, result.breakdown.revolut.transfersOut, result.breakdown.revolut.total);
+  } catch(e) {
+    Logger.log('[ERROR] Revolut expenses %s-%s: %s', month, year, e.message);
+    result.errors.push('Revolut: ' + e.message);
+  }
+  
+  // ===== REVOLUT-TO-NESTOR TRANSFERS (revtag) =====
+  try {
+    Logger.log('[REVOLUT-TO-NESTOR] Fetching transfers for %s-%s', month, year);
+    var revolutToNestor = getRevolutToNestorTransfers_(month, year);
+    if (revolutToNestor && revolutToNestor.length > 0) {
+      result.breakdown.revolutToNestor.transfers = revolutToNestor.length;
+      result.breakdown.revolutToNestor.total = revolutToNestor.reduce(function(sum, tx) { return sum + tx.amount; }, 0);
+      result.details.revolutToNestor = revolutToNestor;
+      result.totalExpenses += result.breakdown.revolutToNestor.total;
+      Logger.log('[REVOLUT-TO-NESTOR] %s-%s: %s transfers, Total $%s', 
+        month, year, result.breakdown.revolutToNestor.transfers, result.breakdown.revolutToNestor.total);
+    }
+  } catch(e) {
+    Logger.log('[ERROR] Revolut-to-Nestor transfers %s-%s: %s', month, year, e.message);
+    result.errors.push('Revolut-to-Nestor: ' + e.message);
+  }
+  
+  // Round totals
+  result.totalExpenses = Math.round(result.totalExpenses * 100) / 100;
+  result.breakdown.mercury.total = Math.round(result.breakdown.mercury.total * 100) / 100;
+  result.breakdown.airwallex.total = Math.round(result.breakdown.airwallex.total * 100) / 100;
+  result.breakdown.revolut.total = Math.round(result.breakdown.revolut.total * 100) / 100;
+  result.breakdown.revolutToNestor.total = Math.round(result.breakdown.revolutToNestor.total * 100) / 100;
+  
+  Logger.log('[EXPENSES] %s-%s TOTAL: $%s', month, year, result.totalExpenses);
+  Logger.log('=== MONTHLY EXPENSES CALCULATION COMPLETED ===');
+  
+  return result;
+}
+
+/**
+ * 📊 Calculate current month expenses up to today's date
+ * @returns {Object} Expense breakdown for current month
+ */
+function calculateCurrentMonthExpensesToDate() {
+  Logger.log('=== CALCULATING CURRENT MONTH EXPENSES TO DATE ===');
+  
+  var now = new Date();
+  var currentMonth = now.getMonth() + 1; // getMonth() returns 0-11
+  var currentYear = now.getFullYear();
+  var today = now.getDate();
+  
+  Logger.log('[EXPENSES] Current month: %s-%s, Today: %s', currentMonth, currentYear, today);
+  
+  // Use the monthly calculation function
+  var result = calculateMonthlyExpensesTotal(currentMonth, currentYear);
+  
+  // Add current month context
+  result.currentMonth = true;
+  result.today = today;
+  result.monthProgress = Math.round((today / new Date(currentYear, currentMonth, 0).getDate()) * 100);
+  
+  Logger.log('[EXPENSES] Current month %s-%s (day %s/%s, %s%% complete): $%s', 
+    currentMonth, currentYear, today, new Date(currentYear, currentMonth, 0).getDate(), result.monthProgress, result.totalExpenses);
+  
+  return result;
+}
+
+/**
+ * 📊 Calculate expenses for multiple months
+ * @param {Array} months - Array of {month, year} objects
+ * @returns {Object} Summary of all months
+ */
+function calculateMultipleMonthsExpenses(months) {
+  Logger.log('=== CALCULATING MULTIPLE MONTHS EXPENSES ===');
+  Logger.log('[EXPENSES] Processing %s months', months.length);
+  
+  var results = [];
+  var grandTotal = 0;
+  var errors = [];
+  
+  for (var i = 0; i < months.length; i++) {
+    var monthData = months[i];
+    try {
+      var monthResult = calculateMonthlyExpensesTotal(monthData.month, monthData.year);
+      results.push(monthResult);
+      grandTotal += monthResult.totalExpenses;
+      Logger.log('[EXPENSES] %s-%s: $%s', monthData.month, monthData.year, monthResult.totalExpenses);
+    } catch (e) {
+      Logger.log('[ERROR] Failed to calculate %s-%s: %s', monthData.month, monthData.year, e.message);
+      errors.push(monthData.month + '-' + monthData.year + ': ' + e.message);
+    }
+  }
+  
+  var summary = {
+    totalMonths: months.length,
+    successfulMonths: results.length,
+    failedMonths: errors.length,
+    grandTotal: Math.round(grandTotal * 100) / 100,
+    results: results,
+    errors: errors
+  };
+  
+  Logger.log('[EXPENSES] Multiple months summary: %s successful, %s failed, Grand total: $%s', 
+    summary.successfulMonths, summary.failedMonths, summary.grandTotal);
+  
+  return summary;
+}
+
 function fetchMercuryExpenses_(month, year) { 
   return httpProxyJson_('/mercury/transactions?month=' + month + '&year=' + year); 
 }
 
 function fetchAirwallexExpenses_(month, year) { 
-  // Airwallex: use direct integration (proxy may be blocked or misreport)
-  Logger.log('[AIRWALLEX] FORCING direct integration for %s-%s', month, year);
-  var result = fetchAirwallexExpensesDirect_(month, year);
-  Logger.log('[AIRWALLEX] Direct integration returned: Cards $%s', result.cardExpenses || 0);
-  return result;
+  Logger.log('[AIRWALLEX] Fetching expenses via proxy server for %s-%s', month, year);
+  return httpProxyJson_('/airwallex/transactions?month=' + month + '&year=' + year);
 }
 
 function fetchRevolutExpenses_(month, year) { 
   return httpProxyJson_('/revolut/transactions?month=' + month + '&year=' + year); 
 }
 
-function fetchAirwallexExpensesDirect_(month, year) {
-  var base = getProp_('AIRWALLEX_BASE') || 'https://api.airwallex.com';
-  var token = airwallexToken_();
-  var startDate = new Date(Number(year), Number(month) - 1, 1);
-  var endDate = new Date(Number(year), Number(month), 0);
-  endDate.setHours(23, 59, 59, 999); // End of day
 
-  Logger.log('[AIRWALLEX-DIRECT] Fetching financial transactions for %s-%s (%s to %s)', month, year, startDate.toISOString(), endDate.toISOString());
-
-  var totalCardExpenses = 0;
-  var totalTransfersOut = 0;
-  var totalTransfersIn = 0;
-  var cardDetails = [];
-  var transferDetails = [];
-  var processedTransactionIds = new Set(); // Track processed transaction IDs to avoid duplicates
-
-  try {
-    var page = 1;
-    var pageSize = 100;
-    var maxPages = 20;
-    var totalFetched = 0;
-    var augustCardTransactions = 0;
-    var augustTotalTransactions = 0;
+/**
+ * Test Airwallex expense calculation for past 4 months + current month
+ */
+function testAirwallexExpenseCalculation() {
+  Logger.log('=== TESTING AIRWALLEX EXPENSE CALCULATION FOR 5 MONTHS ===');
+  
+  var currentDate = new Date();
+  var results = [];
+  
+  // Test current month and past 4 months
+  for (var i = 0; i < 5; i++) {
+    var testDate = new Date(currentDate.getFullYear(), currentDate.getMonth() - i, 1);
+    var month = testDate.getMonth() + 1;
+    var year = testDate.getFullYear();
+    var monthStr = month.toString().padStart(2, '0') + '-' + year;
     
-    while (page <= maxPages) {
-      var url = base + '/api/v1/financial_transactions?page=' + page + '&page_size=' + pageSize;
-      Logger.log('[AIRWALLEX-DIRECT] Fetching: %s', url);
+    Logger.log('[TEST] Testing month: %s', monthStr);
+    
+    try {
+      var expenses = fetchAirwallexExpenses_(month, year);
       
-      var response = UrlFetchApp.fetch(url, {
-        method: 'get', 
-        headers: { 'Authorization': 'Bearer ' + token, 'Accept': 'application/json' },
-        muteHttpExceptions: true
+      var result = {
+        month: monthStr,
+        success: true,
+        cardExpenses: expenses.cardExpenses || 0,
+        transfersOut: expenses.transfersOut || 0,
+        transfersIn: expenses.transfersIn || 0,
+        totalExpenses: (expenses.cardExpenses || 0) + (expenses.transfersOut || 0),
+        details: expenses.cardDetails ? expenses.cardDetails.length : 0,
+        error: null
+      };
+      
+      Logger.log('[TEST] %s: Cards=$%s, TransfersOut=$%s, TransfersIn=$%s, Total=$%s', 
+        monthStr, result.cardExpenses, result.transfersOut, result.transfersIn, result.totalExpenses);
+      
+      results.push(result);
+      
+    } catch (e) {
+      Logger.log('[ERROR] Failed to fetch expenses for %s: %s', monthStr, e.message);
+      
+      results.push({
+        month: monthStr,
+        success: false,
+        cardExpenses: 0,
+        transfersOut: 0,
+        transfersIn: 0,
+        totalExpenses: 0,
+        details: 0,
+        error: e.message
       });
-      
-      if (response.getResponseCode() !== 200) {
-        Logger.log('[AIRWALLEX-DIRECT] HTTP %s: %s', response.getResponseCode(), response.getContentText());
-        break;
-      }
-      
-      var data = JSON.parse(response.getContentText());
-      var transactions = data.items || [];
-      
-      if (transactions.length === 0) {
-        Logger.log('[AIRWALLEX-DIRECT] No more transactions on page %s', page);
-        break;
-      }
-      
-      totalFetched += transactions.length;
-      Logger.log('[AIRWALLEX-DIRECT] Page %s: %s transactions', page, transactions.length);
-      
-      for (var i = 0; i < transactions.length; i++) {
-        var tx = transactions[i];
-        
-        // Skip if already processed
-        if (processedTransactionIds.has(tx.id)) {
-          continue;
-        }
-        processedTransactionIds.add(tx.id);
-        
-        var amount = parseFloat(tx.amount) || 0;
-        var txDate = new Date(tx.settled_at || tx.created_at);
-        var isCard = tx.source_type === 'CARD';
-        var isTransfer = tx.source_type === 'TRANSFER';
-        
-        // Check if transaction is in the target month/year
-        var isTargetMonth = txDate.getMonth() === (Number(month) - 1) && txDate.getFullYear() === Number(year);
-        
-        if (isTargetMonth) {
-          augustTotalTransactions++;
-          
-          Logger.log('[AIRWALLEX-DIRECT] Processing August 2025: %s, amount=%s, source_type=%s, status=%s, settled=%s', 
-                    tx.id, amount, tx.source_type, tx.status, tx.settled_at || tx.created_at);
-          
-          if (isCard && tx.status === 'SETTLED' && amount < 0) {
-            var cardAmount = Math.abs(amount);
-            totalCardExpenses += cardAmount;
-            augustCardTransactions++;
-            cardDetails.push({ 
-              card: 'Airwallex Card', 
-              amount: cardAmount, 
-              description: tx.description || 'Card Purchase', 
-              date: tx.settled_at || tx.created_at,
-              transaction_type: tx.transaction_type,
-              id: tx.id
-            });
-            Logger.log('[AIRWALLEX-DIRECT] Added card transaction: $%s - %s', cardAmount, tx.description || 'Card Purchase');
-          } else if (isTransfer && tx.status === 'SETTLED') {
-            if (amount < 0) {
-              totalTransfersOut += Math.abs(amount);
-              transferDetails.push({ type: 'out', amount: Math.abs(amount), description: tx.description || 'Transfer out', date: tx.settled_at || tx.created_at });
-            } else {
-              totalTransfersIn += amount;
-              transferDetails.push({ type: 'in', amount: amount, description: tx.description || 'Transfer in', date: tx.settled_at || tx.created_at });
-            }
-          }
-        }
-      }
-      
-      page++;
     }
-    
-    Logger.log('[AIRWALLEX-DIRECT] SUMMARY: August 2025 transactions processed: %s total, %s card transactions', augustTotalTransactions, augustCardTransactions);
-    Logger.log('[AIRWALLEX-DIRECT] Card details count: %s', cardDetails.length);
-
-    var result = {
-      month: Number(month), year: Number(year),
-      cardExpenses: Math.round(totalCardExpenses * 100) / 100,
-      transfersOut: Math.round(totalTransfersOut * 100) / 100,
-      transfersIn: Math.round(totalTransfersIn * 100) / 100,
-      cardDetails: cardDetails, transferDetails: transferDetails
-    };
-    
-    Logger.log('[AIRWALLEX-DIRECT] Result: Cards $%s, Transfers out $%s, Transfers in $%s', 
-              result.cardExpenses, result.transfersOut, result.transfersIn);
-    return result;
-    
-  } catch(e) {
-    Logger.log('[ERROR] Airwallex direct integration failed: %s', e.message);
-    return { 
-      month: Number(month), year: Number(year), 
-      cardExpenses: 0, transfersOut: 0, transfersIn: 0, 
-      cardDetails: [], transferDetails: [], 
-      error: 'Integration failed: ' + e.message 
-    };
-  }
-}
-
-function airwallexToken_() {
-  var clientId = getProp_('AIRWALLEX_CLIENT_ID');
-  var clientSecret = getProp_('AIRWALLEX_CLIENT_SECRET');
-  
-  if (!clientId || !clientSecret) {
-    throw new Error('Airwallex credentials not configured');
   }
   
-  var authResult = airwallexAuthenticate_(clientId, clientSecret);
-  if (!authResult.success || !authResult.token) {
-    throw new Error('Airwallex authentication failed: ' + authResult.error);
-  }
+  // Generate summary
+  var summary = {
+    totalMonths: results.length,
+    successfulMonths: results.filter(r => r.success).length,
+    failedMonths: results.filter(r => !r.success).length,
+    totalCardExpenses: results.reduce((sum, r) => sum + r.cardExpenses, 0),
+    totalTransfersOut: results.reduce((sum, r) => sum + r.transfersOut, 0),
+    totalTransfersIn: results.reduce((sum, r) => sum + r.transfersIn, 0),
+    totalExpenses: results.reduce((sum, r) => sum + r.totalExpenses, 0),
+    results: results
+  };
   
-  return authResult.token;
-}
-
-function airwallexAuthenticate_(clientId, clientSecret) {
-  try {
-    var base = getProp_('AIRWALLEX_BASE') || 'https://api.airwallex.com';
-    var url = base + '/api/v1/authentication/login';
-    
-    var payload = {
-      client_id: clientId,
-      client_secret: clientSecret
-    };
-    
-    var response = UrlFetchApp.fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      payload: JSON.stringify(payload),
-      muteHttpExceptions: true
-    });
-    
-    if (response.getResponseCode() !== 200) {
-      return { success: false, error: 'HTTP ' + response.getResponseCode() + ': ' + response.getContentText() };
+  Logger.log('[TEST] === SUMMARY ===');
+  Logger.log('[TEST] Total months tested: %s', summary.totalMonths);
+  Logger.log('[TEST] Successful: %s, Failed: %s', summary.successfulMonths, summary.failedMonths);
+  Logger.log('[TEST] Total card expenses: $%s', summary.totalCardExpenses);
+  Logger.log('[TEST] Total transfers out: $%s', summary.totalTransfersOut);
+  Logger.log('[TEST] Total transfers in: $%s', summary.totalTransfersIn);
+  Logger.log('[TEST] Total expenses: $%s', summary.totalExpenses);
+  
+  // Display results
+  var ui = SpreadsheetApp.getUi();
+  var message = 'Airwallex Expense Calculation Test Results:\n\n';
+  
+  message += '📊 SUMMARY:\n';
+  message += '• Months tested: ' + summary.totalMonths + '\n';
+  message += '• Successful: ' + summary.successfulMonths + '\n';
+  message += '• Failed: ' + summary.failedMonths + '\n\n';
+  
+  message += '💰 TOTALS:\n';
+  message += '• Card expenses: $' + summary.totalCardExpenses.toFixed(2) + '\n';
+  message += '• Transfers out: $' + summary.totalTransfersOut.toFixed(2) + '\n';
+  message += '• Transfers in: $' + summary.totalTransfersIn.toFixed(2) + '\n';
+  message += '• Total expenses: $' + summary.totalExpenses.toFixed(2) + '\n\n';
+  
+  message += '📅 MONTHLY BREAKDOWN:\n';
+  results.forEach(function(result) {
+    if (result.success) {
+      message += '• ' + result.month + ': $' + result.totalExpenses.toFixed(2) + 
+                 ' (Cards: $' + result.cardExpenses.toFixed(2) + 
+                 ', Transfers: $' + result.transfersOut.toFixed(2) + ')\n';
+    } else {
+      message += '• ' + result.month + ': ERROR - ' + result.error + '\n';
     }
-    
-    var data = JSON.parse(response.getContentText());
-    return { success: true, token: data.token };
-    
-  } catch (e) {
-    return { success: false, error: e.message };
-  }
+  });
+  
+  ui.alert('Airwallex Expense Test Results', message, ui.ButtonSet.OK);
+  
+  return summary;
 }
+
+// Airwallex functions removed - now using proxy server exclusively
 
 function getRevolutToNestorTransfers_(month, year) {
   try {
@@ -1324,7 +1268,6 @@ function getRevolutToNestorTransfers_(month, year) {
     return [];
   }
 }
-
 function buildMonthlyExpensesNotes_(me, ae, re, totalToNestor) {
   var noteDetails = [];
   
@@ -1629,7 +1572,6 @@ function intelligentConsolidationSystem_(options) {
     return result;
   }
 }
-
 /* ============== Transfer Status Management Functions ============== */
 function adjustBalancesForPendingTransfers_(balances) {
   /*
@@ -1936,7 +1878,6 @@ function performInternalConsolidation_(bankBalances, dryRun) {
   
   return result;
 }
-
 function performCrossBankTopup_(bankBalances, thresholdUsd, transferAmountUsd, dryRun) {
   /*
    * STEP 3: Cross-bank top-up based on thresholds
@@ -2286,7 +2227,6 @@ function consolidateRevolutUsdFunds_(dryRun) {
   
   return result;
 }
-
 function consolidateMercuryUsdFunds_(dryRun) {
   var result = {
     processed: 0,
@@ -2583,7 +2523,6 @@ function setCellWithNote_(sheetName, a1, value, note) {
     Logger.log('[ERROR] setCellWithNote_ failed: %s', e.message);
   }
 }
-
 /* ============== Bank Minimum Balance Functions ============== */
 function checkBankMinimumBalance_(bankName) {
   try {
@@ -3074,7 +3013,6 @@ function updateBankBalances_(sh, dryRun) {
     return result;
   }
 }
-
 function detectAndReconcilePayouts_(dryRun) {
   var result = {
     status: 'success',
@@ -3227,7 +3165,6 @@ function consolidateFundsToMain_(dryRun) {
     return result;
   }
 }
-
 function calculateMonthlyExpenses_() {
   var result = {
     status: 'success',
@@ -3456,10 +3393,7 @@ function setJsonProp_(key, obj) {
   }
 }
 
-function airwallexToken_() {
-  var tokenData = getJsonProp_('AIRWALLEX_TOKEN');
-  return tokenData ? tokenData.access_token : null;
-}
+// Airwallex token function removed - now using proxy server exclusively
 
 /* ======================================================================================================== */
 /*                                      🛠️ TRIGGERS & MENUS                                              */
@@ -3468,6 +3402,11 @@ function airwallexToken_() {
 /* ============== Main Unified Menu ============== */
 function onOpen() {
   var ui = SpreadsheetApp.getUi();
+  
+  ui.createMenu('⚙️ Torx')
+    .addItem('📤 Send Summary to Slack', 'menuSendSummaryToDaily')
+    .addItem('🔄 Update All Data', 'menuUpdateData')
+    .addToUi();
   
   ui.createMenu('🏦 Banking')
     // Unified Sync (Primary Functions)
@@ -3480,9 +3419,19 @@ function onOpen() {
     .addItem('🧪 Test Expenses Only', 'menuTestSyncExpensesOnly')
     .addSeparator()
     // Balance Monitoring
-    .addItem('💰 Check USD Balances', 'menuCheckUSDBalances')
-    .addItem('🏦 Check Individual Banks', 'menuCheckIndividualBanks')
     .addItem('📊 Show Balance Summary', 'menuShowBalanceSummary')
+    .addItem('📈 Daily/Weekly Summary', 'menuGenerateDailyWeeklySummary')
+    .addItem('📤 Send Summary to Daily', 'menuSendSummaryToDaily')
+    .addItem('🧪 Test Slack Webhook', 'menuTestSlackWebhook')
+    .addItem('⚙️ Setup Slack Credentials', 'menuSetupSlackCredentials')
+    .addSeparator()
+    // Expense Calculations
+    .addSubMenu(ui.createMenu('📊 Expense Calculations')
+      .addItem('📅 Calculate Specific Month', 'menuCalculateSpecificMonthExpenses')
+      .addItem('📆 Calculate Current Month to Date', 'menuCalculateCurrentMonthExpenses')
+      .addItem('📈 Calculate Multiple Months', 'menuCalculateMultipleMonthsExpenses')
+      .addSeparator()
+      .addItem('🧪 Test Specific Month', 'menuTestSpecificMonthExpenses'))
     .addSeparator()
     // Legacy Functions
     .addSubMenu(ui.createMenu('📜 Legacy')
@@ -3516,6 +3465,8 @@ function onOpen() {
     .addToUi();
 
   ui.createMenu('🧪 System Tests')
+    .addItem('🔐 First Time Setup (Authorize)', 'firstTimeSetup')
+    .addSeparator()
     .addItem('🚀 Complete System Test', 'testCompleteSystem')
     .addItem('📊 Validate Sheet', 'testSheetValidation')
     .addSeparator()
@@ -3523,14 +3474,229 @@ function onOpen() {
     .addItem('🧪 Test Unified Sync (Dry Run)', 'testSyncDryRun')
     .addSeparator()
     .addItem('🧪 Test Airwallex API', 'testAirwallexApiIntegration')
+    .addItem('🧪 Test Airwallex Expenses', 'testAirwallexExpenseCalculation')
     .addSeparator()
     .addItem('🧪 Test Sync Components', 'menuTestSyncBalancesOnly')
     .addToUi();
-    
-    
 }
 
-/* ============== Payment System Functions ============== */
+/* ============== Expense Calculation Menu Handlers ============== */
+
+function menuCalculateSpecificMonthExpenses() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    var response = ui.prompt('Calculate Specific Month Expenses', 
+      'Enter the month and year to calculate expenses for:\n\nFormat: MM-YYYY\nExample: 10-2025', 
+      ui.ButtonSet.OK_CANCEL);
+    
+    if (response.getSelectedButton() === ui.Button.OK && response.getResponseText()) {
+      var input = response.getResponseText().trim();
+      var parts = input.split('-');
+      
+      if (parts.length !== 2) {
+        ui.alert('Invalid Format', 'Please use format MM-YYYY (e.g., 10-2025)', ui.ButtonSet.OK);
+        return;
+      }
+      
+      var month = parseInt(parts[0]);
+      var year = parseInt(parts[1]);
+      
+      if (isNaN(month) || isNaN(year) || month < 1 || month > 12 || year < 2025) {
+        ui.alert('Invalid Values', 'Month must be 1-12 and year must be 2025 or later', ui.ButtonSet.OK);
+        return;
+      }
+      
+      ui.alert('Updating Expenses', 'Updating expenses for ' + month + '-' + year + ' in the sheet...\n\nThis may take a few minutes.', ui.ButtonSet.OK);
+      
+      // Update the sheet with the calculated expenses
+      updateSpecificMonthExpenses(month, year);
+      
+      ui.alert('Expenses Updated', '✅ Expenses for ' + month + '-' + year + ' have been updated in the sheet!', ui.ButtonSet.OK);
+      
+    }
+  } catch (e) {
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Calculation Error', 'Failed to calculate expenses: ' + e.message, ui.ButtonSet.OK);
+    Logger.log('[ERROR] menuCalculateSpecificMonthExpenses: %s', e.message);
+  }
+}
+
+function menuCalculateCurrentMonthExpenses() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Updating Current Month', 'Updating current month expenses in the sheet...\n\nThis may take a few minutes.', ui.ButtonSet.OK);
+    
+    // Update the sheet with current month expenses
+    updateCurrentMonthExpenses();
+    
+    ui.alert('Current Month Updated', '✅ Current month expenses have been updated in the sheet!', ui.ButtonSet.OK);
+    
+  } catch (e) {
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Update Error', 'Failed to update current month expenses: ' + e.message, ui.ButtonSet.OK);
+    Logger.log('[ERROR] menuCalculateCurrentMonthExpenses: %s', e.message);
+  }
+}
+
+function menuCalculateMultipleMonthsExpenses() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    var response = ui.prompt('Calculate Multiple Months', 
+      'Enter months to calculate:\n\nFormat: MM-YYYY\n\nExamples:\n• One per line:\n10-2025\n09-2025\n08-2025\n\n• Comma separated:\n10-2025, 09-2025, 08-2025', 
+      ui.ButtonSet.OK_CANCEL);
+    
+    if (response.getSelectedButton() === ui.Button.OK && response.getResponseText()) {
+      var input = response.getResponseText().trim();
+      var months = [];
+      
+      // Check if input contains commas (comma-separated format)
+      if (input.includes(',')) {
+        // Parse comma-separated months
+        var parts = input.split(',');
+        for (var i = 0; i < parts.length; i++) {
+          var part = parts[i].trim();
+          if (part) {
+            var monthParts = part.split('-');
+            if (monthParts.length === 2) {
+              var month = parseInt(monthParts[0]);
+              var year = parseInt(monthParts[1]);
+              if (!isNaN(month) && !isNaN(year) && month >= 1 && month <= 12 && year >= 2025) {
+                months.push({ month: month, year: year });
+              }
+            }
+          }
+        }
+      } else {
+        // Parse line-by-line format
+        var lines = input.split('\n');
+        for (var i = 0; i < lines.length; i++) {
+          var line = lines[i].trim();
+          if (line) {
+            var parts = line.split('-');
+            if (parts.length === 2) {
+              var month = parseInt(parts[0]);
+              var year = parseInt(parts[1]);
+              if (!isNaN(month) && !isNaN(year) && month >= 1 && month <= 12 && year >= 2025) {
+                months.push({ month: month, year: year });
+              }
+            }
+          }
+        }
+      }
+      
+      if (months.length === 0) {
+        ui.alert('No Valid Months', 'No valid months found. Please use format MM-YYYY', ui.ButtonSet.OK);
+        return;
+      }
+      
+      ui.alert('Updating Multiple Months', 'Updating expenses for ' + months.length + ' months in the sheet...\n\nThis may take several minutes.', ui.ButtonSet.OK);
+      
+      // Update the sheet for each month
+      var successfulUpdates = 0;
+      var failedUpdates = 0;
+      var errors = [];
+      
+      for (var i = 0; i < months.length; i++) {
+        try {
+          var monthData = months[i];
+          updateSpecificMonthExpenses(monthData.month, monthData.year);
+          successfulUpdates++;
+          Logger.log('[UPDATE] Successfully updated %s-%s', monthData.month, monthData.year);
+        } catch (e) {
+          failedUpdates++;
+          var errorMsg = monthData.month + '-' + monthData.year + ': ' + e.message;
+          errors.push(errorMsg);
+          Logger.log('[ERROR] Failed to update %s-%s: %s', monthData.month, monthData.year, e.message);
+        }
+      }
+      
+      var message = '📊 MULTIPLE MONTHS UPDATE COMPLETE\n\n';
+      message += '📅 Total Months: ' + months.length + '\n';
+      message += '✅ Successfully Updated: ' + successfulUpdates + '\n';
+      message += '❌ Failed Updates: ' + failedUpdates + '\n\n';
+      
+      if (errors.length > 0) {
+        message += '⚠️ ERRORS:\n';
+        errors.forEach(function(error) {
+          message += '• ' + error + '\n';
+        });
+      } else {
+        message += '🎉 All months updated successfully!';
+      }
+      
+      ui.alert('Multiple Months Update Results', message, ui.ButtonSet.OK);
+      
+    }
+  } catch (e) {
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Calculation Error', 'Failed to calculate multiple months expenses: ' + e.message, ui.ButtonSet.OK);
+    Logger.log('[ERROR] menuCalculateMultipleMonthsExpenses: %s', e.message);
+  }
+}
+
+function menuTestSpecificMonthExpenses() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    var response = ui.prompt('Test Specific Month Expenses', 
+      'Enter the month and year to test:\n\nFormat: MM-YYYY\nExample: 10-2025', 
+      ui.ButtonSet.OK_CANCEL);
+    
+    if (response.getSelectedButton() === ui.Button.OK && response.getResponseText()) {
+      var input = response.getResponseText().trim();
+      var parts = input.split('-');
+      
+      if (parts.length !== 2) {
+        ui.alert('Invalid Format', 'Please use format MM-YYYY (e.g., 10-2025)', ui.ButtonSet.OK);
+        return;
+      }
+      
+      var month = parseInt(parts[0]);
+      var year = parseInt(parts[1]);
+      
+      if (isNaN(month) || isNaN(year) || month < 1 || month > 12 || year < 2025) {
+        ui.alert('Invalid Values', 'Month must be 1-12 and year must be 2025 or later', ui.ButtonSet.OK);
+        return;
+      }
+      
+      ui.alert('Testing Expenses', 'Testing expense calculation for ' + month + '-' + year + '...\n\nThis is a test run (no changes made).', ui.ButtonSet.OK);
+      
+      var result = calculateMonthlyExpensesTotal(month, year);
+      
+      var message = '🧪 EXPENSE CALCULATION TEST\n\n';
+      message += '📅 Month: ' + result.monthStr + '\n';
+      message += '💰 Total Expenses: $' + result.totalExpenses.toFixed(2) + '\n\n';
+      
+      message += '🏦 DETAILED BREAKDOWN:\n';
+      message += '• Mercury: $' + result.breakdown.mercury.total.toFixed(2) + '\n';
+      message += '  - Cards: $' + result.breakdown.mercury.cardExpenses.toFixed(2) + '\n';
+      message += '  - Transfers Out: $' + result.breakdown.mercury.transfersOut.toFixed(2) + '\n';
+      message += '• Airwallex: $' + result.breakdown.airwallex.total.toFixed(2) + '\n';
+      message += '  - Cards: $' + result.breakdown.airwallex.cardExpenses.toFixed(2) + '\n';
+      message += '  - Transfers Out: $' + result.breakdown.airwallex.transfersOut.toFixed(2) + '\n';
+      message += '• Revolut: $' + result.breakdown.revolut.total.toFixed(2) + '\n';
+      message += '  - Cards: $' + result.breakdown.revolut.cardExpenses.toFixed(2) + '\n';
+      message += '  - Transfers Out: $' + result.breakdown.revolut.transfersOut.toFixed(2) + '\n';
+      
+      if (result.breakdown.revolutToNestor.total > 0) {
+        message += '• Revolut-to-Nestor: $' + result.breakdown.revolutToNestor.total.toFixed(2) + ' (' + result.breakdown.revolutToNestor.transfers + ' transfers)\n';
+      }
+      
+      if (result.errors.length > 0) {
+        message += '\n⚠️ ERRORS:\n';
+        result.errors.forEach(function(error) {
+          message += '• ' + error + '\n';
+        });
+      }
+      
+      ui.alert('Test Results', message, ui.ButtonSet.OK);
+      
+    }
+  } catch (e) {
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Test Error', 'Failed to test expenses: ' + e.message, ui.ButtonSet.OK);
+    Logger.log('[ERROR] menuTestSpecificMonthExpenses: %s', e.message);
+  }
+}
 function checkPaymentPrerequisites() {
   Logger.log('[PAYMENT_PREREQ] Checking payment system prerequisites...');
   
@@ -3635,7 +3801,6 @@ function dryRunPayUsersForPreviousMonth() {
   Logger.log('[DRY_RUN] Running dry run for previous month: %s', monthStr);
   return dryRunPayUsersForMonth(monthStr);
 }
-
 function payUsersForPreviousMonth() {
   var now = new Date();
   var previousMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
@@ -3644,7 +3809,6 @@ function payUsersForPreviousMonth() {
   Logger.log('[PAY_USERS] Processing payments for previous month: %s', monthStr);
   return payUsersForMonth(monthStr);
 }
-
 function dryRunPayUsersForMonth(monthStr) {
   Logger.log('[DRY_RUN] Starting dry run for month: %s', monthStr);
   
@@ -3896,72 +4060,36 @@ function getPaymentDataForMonth_(monthStr) {
 }
 
 /**
- * Test Airwallex API integration with corrected header-based authentication
+ * Test Airwallex API integration via proxy server
  */
 function testAirwallexApiIntegration() {
-  Logger.log('=== TESTING AIRWALLEX API INTEGRATION ===');
+  Logger.log('=== TESTING AIRWALLEX API INTEGRATION VIA PROXY ===');
   
   try {
-    // Get credentials from properties
-    var clientId = getProp_('AIRWALLEX_CLIENT_ID');
-    var clientSecret = getProp_('AIRWALLEX_CLIENT_SECRET');
+    Logger.log('[TEST] Testing Airwallex via proxy server...');
     
-    if (!clientId || !clientSecret) {
-      Logger.log('[ERROR] Airwallex credentials not found in properties');
-      return {
-        success: false,
-        error: 'Missing Airwallex credentials (AIRWALLEX_CLIENT_ID, AIRWALLEX_CLIENT_SECRET)'
-      };
-    }
+    // Test summary endpoint
+    var summary = httpProxyJson_('/airwallex/summary');
     
-    Logger.log('[TEST] Testing Airwallex authentication with header-based auth...');
-    
-    // Test authentication
-    var authResult = airwallexAuthenticate_(clientId, clientSecret);
-    
-    if (!authResult.success) {
-      Logger.log('[ERROR] Airwallex authentication failed: %s', authResult.error);
-      return {
-        success: false,
-        error: 'Authentication failed: ' + authResult.error
-      };
-    }
-    
-    Logger.log('[TEST] ✅ Authentication successful!');
-    Logger.log('[TEST] Token: %s...', authResult.token.substring(0, 20));
-    
-    // Test getting balances
-    Logger.log('[TEST] Testing balance retrieval...');
-    var balances = airwallexGetBalances_(authResult.token);
-    
-    if (balances && balances.length > 0) {
-      Logger.log('[TEST] ✅ Balance retrieval successful!');
-      Logger.log('[TEST] Found %s accounts', balances.length);
-      
-      for (var i = 0; i < balances.length; i++) {
-        var account = balances[i];
-        Logger.log('[TEST] Account: %s - %s %s', account.name, account.balance, account.currency);
-      }
+    if (summary && typeof summary.USD !== 'undefined') {
+      Logger.log('[TEST] ✅ Airwallex proxy integration working correctly');
+      Logger.log('[TEST] Summary: USD=%s, EUR=%s, Accounts=%s', summary.USD, summary.EUR, summary.count);
       
       return {
         success: true,
-        message: 'Airwallex API integration working correctly',
-        accounts: balances.length,
-        token: authResult.token.substring(0, 20) + '...'
+        message: 'Airwallex proxy integration working correctly',
+        summary: summary
       };
-      
     } else {
-      Logger.log('[WARNING] No balances returned, but authentication worked');
+      Logger.log('[TEST] ❌ Invalid response from Airwallex proxy');
       return {
-        success: true,
-        message: 'Authentication successful, but no balance data returned',
-        accounts: 0,
-        token: authResult.token.substring(0, 20) + '...'
+        success: false,
+        error: 'Invalid response from proxy server'
       };
     }
     
   } catch (e) {
-    Logger.log('[ERROR] Airwallex API test failed: %s', e.message);
+    Logger.log('[ERROR] Airwallex proxy test failed: %s', e.message);
     return {
       success: false,
       error: e.message
@@ -4191,62 +4319,36 @@ function getBankAccountSummary() {
 }
 
 function testAirwallexApiDirect() {
-  Logger.log('=== TESTING AIRWALLEX API DIRECT CONNECTION ===');
+  Logger.log('=== TESTING AIRWALLEX API VIA PROXY ===');
   try {
-    // Test the authentication
-    var clientId = getProp_('AIRWALLEX_CLIENT_ID');
-    var clientSecret = getProp_('AIRWALLEX_CLIENT_SECRET');
+    // Test via proxy server
+    Logger.log('[TEST] Testing Airwallex via proxy server...');
+    var summary = httpProxyJson_('/airwallex/summary');
     
-    Logger.log('[TEST] Available credentials:');
-    Logger.log('[TEST] Client ID: %s', clientId ? clientId.substring(0, 8) + '...' : 'NOT SET');
-    Logger.log('[TEST] Client Secret: %s', clientSecret ? 'SET' : 'NOT SET');
-    
-    if (!clientId || !clientSecret) {
-      Logger.log('[ERROR] Missing Airwallex credentials!');
-      Logger.log('[ERROR] Please set AIRWALLEX_CLIENT_ID and AIRWALLEX_CLIENT_SECRET in Script Properties');
-      return false;
-    }
-    
-    // Test authentication
-    Logger.log('[TEST] Step 1: Testing authentication...');
-    var authResult = airwallexAuthenticate_(clientId, clientSecret);
-    
-    if (!authResult.success) {
-      Logger.log('[ERROR] Authentication failed: %s', authResult.error);
-      return false;
-    }
-    
-    Logger.log('[TEST] ✅ Authentication successful!');
-    
-    // Test balance fetching
-    Logger.log('[TEST] Step 2: Testing balance fetching...');
-    var balances = airwallexGetBalances_(authResult.token);
-    
-    Logger.log('[TEST] ✅ Retrieved %s balance entries', balances.length);
-    
-    // Test summary generation
-    Logger.log('[TEST] Step 3: Testing summary generation...');
-    var summary = fetchAirwallexSummary_();
-    
-    Logger.log('[TEST] ✅ Summary generated: %s', JSON.stringify(summary));
-    
-    var ui = SpreadsheetApp.getUi();
-    var message = 'Airwallex Direct API Test Results:\n\n' +
-      '✅ Authentication: SUCCESS\n' +
-      '✅ Balance Fetch: ' + balances.length + ' entries\n' +
-      '✅ Summary: $' + summary.USD + ' USD, €' + summary.EUR + ' EUR\n' +
-      '📊 Total Accounts: ' + summary.count;
+    if (summary && typeof summary.USD !== 'undefined') {
+      Logger.log('[TEST] ✅ Airwallex proxy test successful!');
+      Logger.log('[TEST] Summary: USD=%s, EUR=%s, Accounts=%s', summary.USD, summary.EUR, summary.count);
       
-    ui.alert('Airwallex API Test', message, ui.ButtonSet.OK);
-    
-    return true;
+      var ui = SpreadsheetApp.getUi();
+      var message = 'Airwallex Proxy API Test Results:\n\n' +
+        '✅ Proxy Connection: SUCCESS\n' +
+        '✅ Summary: $' + summary.USD + ' USD, €' + summary.EUR + ' EUR\n' +
+        '📊 Total Accounts: ' + summary.count;
+        
+      ui.alert('Airwallex Proxy Test', message, ui.ButtonSet.OK);
+      return true;
+    } else {
+      Logger.log('[ERROR] Invalid response from Airwallex proxy');
+      SpreadsheetApp.getUi().alert('Error', 'Invalid response from Airwallex proxy server', SpreadsheetApp.getUi().ButtonSet.OK);
+      return false;
+    }
     
   } catch (e) {
-    Logger.log('[ERROR] Airwallex API test failed: %s', e.message);
+    Logger.log('[ERROR] Airwallex proxy test failed: %s', e.message);
     Logger.log('[ERROR] Stack trace: %s', e.stack);
     
     var ui = SpreadsheetApp.getUi();
-    ui.alert('Airwallex API Test Failed', 'Error: ' + e.message, ui.ButtonSet.OK);
+    ui.alert('Airwallex Proxy Test Failed', 'Error: ' + e.message, ui.ButtonSet.OK);
     
     return false;
   }
@@ -4344,9 +4446,7 @@ function testDailyConsolidationTrigger() {
     Logger.log('[ERROR] Daily consolidation trigger test failed: %s', e.message);
     SpreadsheetApp.getUi().alert('Trigger Test Failed', 'Daily intelligent consolidation test failed: ' + e.message, SpreadsheetApp.getUi().ButtonSet.OK);
   }
-
 }
-
 function testIntelligentConsolidationManual() {
   /*
    * Manual test function for intelligent consolidation system
@@ -4482,7 +4582,6 @@ function checkPendingTransfers_() {
     return false;
   }
 }
-
 function addPendingTransfer_(accountId, amount, currency, transactionId, bankName) {
   try {
     var pendingTransfers = [];
@@ -4509,7 +4608,6 @@ function addPendingTransfer_(accountId, amount, currency, transactionId, bankNam
     Logger.log('[ERROR] addPendingTransfer_ failed: %s', e.message);
   }
 }
-
 function getPendingTransfers_() {
   try {
     var pendingTransfers = getProp_('pending_transfers');
@@ -4977,7 +5075,6 @@ function TRIGGER_checkBankMinimumBalances() {
     };
   }
 }
-
 function testMinimumBalanceTrigger() {
   Logger.log('=== TESTING MINIMUM BALANCE TRIGGER ===');
   
@@ -5251,7 +5348,6 @@ function testPaymentSystem() {
  * 
  * This single file now contains complete functionality while eliminating code duplication!
  *******************************************************************************************************/
-
 /* ============== USD BALANCE MONITORING ============== */
 function checkUSDBalanceThreshold(suppressAlert) {
   try {
@@ -5384,8 +5480,8 @@ function menuDryRunSpecificMonth() {
     var ui = SpreadsheetApp.getUi();
     var response = ui.prompt('Dry Run Specific Month', 'Enter the month to test (format: YYYY-MM):\n\nExample: 2024-01', ui.ButtonSet.OK_CANCEL);
     
-    if (response.getSelectedButton() === ui.Button.OK && response.getText()) {
-      var month = response.getText().trim();
+    if (response.getSelectedButton() === ui.Button.OK && response.getResponseText()) {
+      var month = response.getResponseText().trim();
       ui.alert('Testing Payment System', 'Running dry run test for ' + month + '...\n\nThis will show what would happen without making actual payments.', ui.ButtonSet.OK);
       
       // Call the specific month dry run function
@@ -5419,15 +5515,15 @@ function menuPaySpecificMonth() {
     var ui = SpreadsheetApp.getUi();
     var response = ui.prompt('Pay Specific Month', '⚠️ WARNING: This will make REAL PAYMENTS!\n\nEnter the month to pay (format: YYYY-MM):\n\nExample: 2024-01', ui.ButtonSet.OK_CANCEL);
     
-    if (response.getSelectedButton() === ui.Button.OK && response.getText()) {
-      var month = response.getText().trim();
+    if (response.getSelectedButton() === ui.Button.OK && response.getResponseText()) {
+      var month = response.getResponseText().trim();
       
       // Confirm the real payment
       var confirmResponse = ui.alert('Final Confirmation', '🚨 ARE YOU SURE?\n\nThis will make REAL payments for ' + month + '!\n\nTotal payout will be calculated and transferred.\n\nType YES to confirm:');
       ui.prompt('Final Confirmation', 'Type YES to confirm real payment:', ui.ButtonSet.OK_CANCEL);
       
       var confirmResponse = ui.prompt('Final Confirmation', 'Type YES to confirm real payment:', ui.ButtonSet.OK_CANCEL);
-      if (confirmResponse.getSelectedButton() === ui.Button.OK && confirmResponse.getText().trim().toUpperCase() === 'YES') {
+      if (confirmResponse.getSelectedButton() === ui.Button.OK && confirmResponse.getResponseText().trim().toUpperCase() === 'YES') {
         
         ui.alert('Processing Payments', 'Executing real payments for ' + month + '...\n\nThis may take a few minutes.', ui.ButtonSet.OK);
         
@@ -5569,7 +5665,6 @@ function debugMenuFunctions() {
   
   ui.alert('Menu Functions Debug', message, ui.ButtonSet.OK);
 }
-
 function reconcileTransferWithSpreadsheet(receivedAmount, bankName, accountName) {
   /*
    * 🔄 RECONCILE ALL TRANSFERS WITH SPREADSHEET
@@ -6042,7 +6137,6 @@ function menuCheckIndividualBanks() {
     displayErrorDialog('Individual Bank Check Error', e.message);
   }
 }
-
 function menuShowBalanceSummary() {
   try {
     var ui = SpreadsheetApp.getUi();
@@ -6219,7 +6313,6 @@ function menuTestSyncExpensesOnly() {
     displayErrorDialog('Expense Test Error', e.message);
   }
 }
-
 function menuUpdateCurrentMonthExpenses() {
   try {
     var ui = SpreadsheetApp.getUi();
@@ -6675,4 +6768,776 @@ function displayError(title, errorMessage) {
   }
 }
 
-// End of file - All functions properly closed
+/**
+ * 📊 DAILY/WEEKLY/MONTHLY SUMMARY REPORT
+ * 
+ * Generates a comprehensive summary report with:
+ * - Current day data with differences from previous day
+ * - Current week accumulated totals
+ * - Current month accumulated totals
+ * - Formatted for Slack with emojis and clear structure
+ */
+
+/**
+ * Parse a formatted number string (removes $, commas, etc.)
+ */
+function parseNumber(value) {
+  if (!value || value === '') return 0;
+  
+  // Convert to string and remove common formatting
+  var str = String(value);
+  
+  // Remove currency symbols, commas, spaces
+  str = str.replace(/[$,\s]/g, '');
+  
+  // Parse as number
+  var num = parseFloat(str);
+  
+  // Return 0 if not a valid number
+  return isNaN(num) ? 0 : num;
+}
+
+/**
+ * Save daily snapshot of current data for comparison
+ */
+function saveDailySnapshot(summary, currentMonth, currentYear) {
+  try {
+    var today = new Date();
+    var dateStr = today.getFullYear() + '-' + (today.getMonth() + 1).toString().padStart(2, '0') + '-' + today.getDate().toString().padStart(2, '0');
+    
+    // Store in PropertiesService for persistence
+    var properties = PropertiesService.getScriptProperties();
+    var snapshotKey = 'daily_snapshot_' + dateStr;
+    
+    var snapshot = {
+      date: dateStr,
+      month: currentMonth,
+      year: currentYear,
+      data: summary.currentDay
+    };
+    
+    properties.setProperty(snapshotKey, JSON.stringify(snapshot));
+    Logger.log('[SNAPSHOT] Saved daily snapshot for ' + dateStr);
+    
+  } catch (e) {
+    Logger.log('[ERROR] Failed to save daily snapshot: ' + e.message);
+  }
+}
+
+/**
+ * Load previous day's snapshot for comparison
+ */
+function loadPreviousDaySnapshot(currentMonth, currentYear) {
+  try {
+    var yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    var dateStr = yesterday.getFullYear() + '-' + (yesterday.getMonth() + 1).toString().padStart(2, '0') + '-' + yesterday.getDate().toString().padStart(2, '0');
+    
+    var properties = PropertiesService.getScriptProperties();
+    var snapshotKey = 'daily_snapshot_' + dateStr;
+    var snapshotData = properties.getProperty(snapshotKey);
+    
+    if (snapshotData) {
+      var snapshot = JSON.parse(snapshotData);
+      Logger.log('[SNAPSHOT] Loaded previous day snapshot for ' + dateStr);
+      return snapshot.data;
+    } else {
+      Logger.log('[SNAPSHOT] No previous day snapshot found for ' + dateStr);
+      return null;
+    }
+    
+  } catch (e) {
+    Logger.log('[ERROR] Failed to load previous day snapshot: ' + e.message);
+    return null;
+  }
+}
+
+/**
+ * Send message to Slack using webhook URL
+ */
+function sendSlackMessageWebhook(message, webhookUrl) {
+  try {
+    var payload = {
+      'text': message
+    };
+    
+    var options = {
+      'method': 'POST',
+      'contentType': 'application/json',
+      'payload': JSON.stringify(payload)
+    };
+    
+    var response = UrlFetchApp.fetch(webhookUrl, options);
+    var responseCode = response.getResponseCode();
+    
+    if (responseCode === 200) {
+      Logger.log('[SLACK] Message sent successfully via webhook');
+      return true;
+    } else {
+      Logger.log('[SLACK] Failed to send message via webhook. Response code: ' + responseCode);
+      return false;
+    }
+    
+  } catch (e) {
+    Logger.log('[SLACK] Error sending message via webhook: ' + e.message);
+    return false;
+  }
+}
+
+/**
+ * Send message to Slack using bot token
+ */
+function sendSlackMessageToken(message, token, channel) {
+  try {
+    var url = 'https://slack.com/api/chat.postMessage';
+    
+    var payload = {
+      'channel': channel,
+      'text': message,
+      'token': token
+    };
+    
+    var options = {
+      'method': 'POST',
+      'contentType': 'application/x-www-form-urlencoded',
+      'payload': payload
+    };
+    
+    var response = UrlFetchApp.fetch(url, options);
+    var responseData = JSON.parse(response.getContentText());
+    
+    if (responseData.ok) {
+      Logger.log('[SLACK] Message sent successfully via token');
+      return true;
+    } else {
+      Logger.log('[SLACK] Failed to send message via token. Error: ' + responseData.error);
+      return false;
+    }
+    
+  } catch (e) {
+    Logger.log('[SLACK] Error sending message via token: ' + e.message);
+    return false;
+  }
+}
+/**
+ * Send daily summary to Slack
+ */
+function sendDailySummaryToSlack(channel = 'daily') {
+  try {
+    Logger.log('[SLACK] Generating and sending daily summary to Slack channel: ' + channel);
+    
+    // Generate the summary message
+    var summaryMessage = generateDailyWeeklySummary();
+    
+    // Check if summary generation failed
+    if (!summaryMessage || summaryMessage.startsWith('Error generating summary:')) {
+      Logger.log('[SLACK] Summary generation failed: ' + summaryMessage);
+      return 'Failed to generate summary: ' + summaryMessage;
+    }
+    
+    // Get Slack webhook URL for specific channel
+    var properties = PropertiesService.getScriptProperties();
+    var webhookUrl = properties.getProperty('SLACK_WEBHOOK_URL_' + channel.toUpperCase());
+    
+    if (!webhookUrl) {
+      Logger.log('[SLACK] No webhook URL found for channel: ' + channel);
+      return 'No webhook URL configured for ' + channel + ' channel. Please setup credentials first.';
+    }
+    
+    // Send via webhook
+    var success = sendSlackMessageWebhook(summaryMessage, webhookUrl);
+    
+    if (success) {
+      Logger.log('[SLACK] Summary sent successfully via webhook to ' + channel);
+      return 'Summary sent to Slack (' + channel + ') successfully!';
+    } else {
+      Logger.log('[SLACK] Failed to send summary to ' + channel + '. Please check webhook URL.');
+      return 'Failed to send summary to Slack (' + channel + '). Please check your webhook URL.';
+    }
+    
+  } catch (e) {
+    Logger.log('[SLACK] Error in sendDailySummaryToSlack: ' + e.message);
+    return 'Error sending summary to Slack (' + channel + '): ' + e.message;
+  }
+}
+/**
+ * Generate daily/weekly summary for Slack
+ */
+function generateDailyWeeklySummary() {
+  try {
+    Logger.log('=== GENERATING DAILY/WEEKLY SUMMARY ===');
+
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Payouts');
+    if (!sheet) {
+      throw new Error('Payouts sheet not found');
+    }
+
+    var now = new Date();
+    var today = now.getDate();
+    var currentMonth = now.getMonth() + 1;
+    var currentYear = now.getFullYear();
+
+    var weekStart = new Date(now);
+    var dayOfWeek = now.getDay();
+    var daysToMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+    weekStart.setDate(now.getDate() - daysToMonday);
+
+    Logger.log('[SUMMARY] Processing data for today=%s, weekStart=%s/%s, month=%s/%s', today, weekStart.getDate(), weekStart.getMonth() + 1, currentMonth, currentYear);
+
+    var lastRow = sheet.getLastRow();
+    var lastCol = sheet.getLastColumn();
+    var allData = sheet.getRange(1, 1, lastRow, lastCol).getValues();
+
+    var summary = {
+      currentDay: {
+        farmed: 0,
+        pending: 0,
+        payouts: 0,
+        balance: 0,
+        expenses: 0,
+        day1: 0,
+        day2: 0,
+        funded: 0
+      },
+      previousDay: {
+        farmed: 0,
+        pending: 0,
+        payouts: 0,
+        balance: 0,
+        expenses: 0,
+        day1: 0,
+        day2: 0,
+        funded: 0
+      },
+      weekAccumulated: {
+        farmed: 0,
+        pending: 0,
+        payouts: 0,
+        balance: 0,
+        expenses: 0,
+        day1: 0,
+        day2: 0,
+        funded: 0
+      }
+    };
+
+    var currentMonthStr = currentYear + '-' + currentMonth.toString().padStart(2, '0');
+    var currentMonthRow = -1;
+
+    for (var row = 7; row <= lastRow; row++) {
+      try {
+        var monthValue = sheet.getRange(row, 1).getValue();
+        if (monthValue && String(monthValue).includes(currentMonthStr)) {
+          currentMonthRow = row;
+          Logger.log('[SUMMARY] Found current month row: %s for %s', currentMonthRow, currentMonthStr);
+          break;
+        }
+      } catch (innerErr) {
+        Logger.log('[SUMMARY] Error reading month at row %s: %s', row, innerErr.message);
+      }
+    }
+
+    if (currentMonthRow === -1) {
+      Logger.log('[SUMMARY] Using fallback row 11 for month %s', currentMonthStr);
+      currentMonthRow = 11;
+    }
+
+    try {
+      summary.currentDay.farmed = Number(sheet.getRange(currentMonthRow, 2).getValue()) || 0;
+      summary.currentDay.payouts = Number(sheet.getRange(currentMonthRow, 3).getValue()) || 0;
+      summary.currentDay.balance = Number(sheet.getRange(currentMonthRow, 4).getValue()) || 0;
+      summary.currentDay.expenses = Number(sheet.getRange(currentMonthRow, 5).getValue()) || 0;
+      summary.currentDay.day1 = Number(sheet.getRange(currentMonthRow, 11).getValue()) || 0;
+      summary.currentDay.day2 = Number(sheet.getRange(currentMonthRow, 12).getValue()) || 0;
+      summary.currentDay.funded = Number(sheet.getRange(currentMonthRow, 13).getValue()) || 0;
+      summary.currentDay.pending = Number(sheet.getRange('G21').getValue()) || 0;
+    } catch (sheetErr) {
+      Logger.log('[SUMMARY] Error reading current month row %s: %s', currentMonthRow, sheetErr.message);
+    }
+
+    summary.previousDay.farmed = summary.currentDay.farmed;
+    summary.previousDay.pending = summary.currentDay.pending;
+    summary.previousDay.payouts = summary.currentDay.payouts;
+    summary.previousDay.balance = summary.currentDay.balance;
+    summary.previousDay.expenses = summary.currentDay.expenses;
+    summary.previousDay.day1 = summary.currentDay.day1;
+    summary.previousDay.day2 = summary.currentDay.day2;
+    summary.previousDay.funded = summary.currentDay.funded;
+
+    saveDailySnapshot(summary, currentMonth, currentYear);
+
+    summary.weekAccumulated.farmed = 0;
+    summary.weekAccumulated.pending = 0;
+    summary.weekAccumulated.payouts = 0;
+    summary.weekAccumulated.balance = 0;
+    summary.weekAccumulated.expenses = 0;
+    summary.weekAccumulated.day1 = 0;
+    summary.weekAccumulated.day2 = 0;
+    summary.weekAccumulated.funded = 0;
+
+    var message = generateSlackSummaryMessage(summary, today, currentMonth, currentYear);
+    Logger.log('[SUMMARY] Generated summary message (%s chars)', message.length);
+    return message;
+  } catch (e) {
+    Logger.log('[ERROR] Error in generateDailyWeeklySummary: ' + e.message);
+    return 'Error generating summary: ' + e.message;
+  }
+}
+
+/**
+ * Generate Slack-formatted summary message
+ */
+function generateSlackSummaryMessage(summary, today, currentMonth, currentYear) {
+  var message = '';
+  
+  // Header
+  message += '📅 *' + today + '/' + currentMonth + '/' + currentYear + '*\n\n';
+  
+  // Calculate week number
+  var now = new Date();
+  var start = new Date(now.getFullYear(), 0, 1);
+  var diff = now - start;
+  var oneWeek = 1000 * 60 * 60 * 24 * 7;
+  var weekNumber = Math.floor(diff / oneWeek) + 1;
+  
+  // Month name
+  var monthNames = ['', 'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  var monthName = monthNames[currentMonth];
+  
+  // Today
+  message += '*Today*\n';
+  message += formatDifferenceLine('💰 Farmed', summary.currentDay.farmed, summary.previousDay.farmed);
+  message += formatDifferenceLine('⏳ Pending', summary.currentDay.pending, summary.previousDay.pending);
+  message += formatDifferenceLine('💸 Payouts', summary.currentDay.payouts, summary.previousDay.payouts);
+  message += formatDifferenceLine('🏦 Balance', summary.currentDay.balance, summary.previousDay.balance);
+  message += formatDifferenceLine('💳 Expenses', summary.currentDay.expenses, summary.previousDay.expenses);
+  message += formatDifferenceLine('1️⃣ Day 1', summary.currentDay.day1, summary.previousDay.day1, true);
+  message += formatDifferenceLine('2️⃣ Day 2', summary.currentDay.day2, summary.previousDay.day2, true);
+  message += formatDifferenceLine('✅ Funded', summary.currentDay.funded, summary.previousDay.funded, true);
+  message += '\n';
+  
+  // Week
+  message += '*Week ' + weekNumber + '*\n';
+  message += formatAccumulatedLine('💰 Farmed', summary.weekAccumulated.farmed);
+  message += formatAccumulatedLine('⏳ Pending', summary.weekAccumulated.pending);
+  message += formatAccumulatedLine('💸 Payouts', summary.weekAccumulated.payouts);
+  message += formatAccumulatedLine('🏦 Balance', summary.weekAccumulated.balance);
+  message += formatAccumulatedLine('💳 Expenses', summary.weekAccumulated.expenses);
+  message += formatAccumulatedLine('1️⃣ Day 1', summary.weekAccumulated.day1, true);
+  message += formatAccumulatedLine('2️⃣ Day 2', summary.weekAccumulated.day2, true);
+  message += formatAccumulatedLine('✅ Funded', summary.weekAccumulated.funded, true);
+  message += '\n';
+  
+  
+  return message;
+}
+
+/**
+ * Format difference line with emoji and change indicator
+ */
+function formatDifferenceLine(label, current, previous, isNumber = false) {
+  var difference = current - previous;
+  var changeSign = difference >= 0 ? '+' : '';
+  
+  // Format numbers with proper commas
+  var currentStr, diffStr;
+  if (isNumber) {
+    currentStr = current.toLocaleString();
+    diffStr = changeSign + difference.toLocaleString();
+  } else {
+    currentStr = '$' + current.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    diffStr = changeSign + '$' + difference.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  }
+  
+  // Add 3 spaces for alignment if there's text to the right
+  var alignmentSpaces = '   ';
+  
+  return '• ' + label + ': ' + currentStr + alignmentSpaces + diffStr + '\n';
+}
+
+/**
+ * Format accumulated line
+ */
+function formatAccumulatedLine(label, amount, isNumber = false) {
+  // Format numbers with proper commas
+  var amountStr;
+  if (isNumber) {
+    amountStr = amount.toLocaleString();
+  } else {
+    amountStr = '$' + amount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  }
+  
+  return '• ' + label + ': ' + amountStr + '\n';
+}
+
+/**
+ * Menu function to generate and display summary
+ */
+function menuGenerateDailyWeeklySummary() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Generating Summary', 'Generating daily/weekly summary...\n\nThis may take a few moments.', ui.ButtonSet.OK);
+    
+    var result = generateDailyWeeklySummary();
+    
+    if (result.success) {
+      ui.alert('Summary Generated', result.message, ui.ButtonSet.OK);
+    } else {
+      ui.alert('Error', 'Failed to generate summary: ' + result.error, ui.ButtonSet.OK);
+    }
+    
+  } catch (e) {
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Error', 'Failed to generate summary: ' + e.message, ui.ButtonSet.OK);
+    Logger.log('[ERROR] menuGenerateDailyWeeklyMonthlySummary: ' + e.message);
+  }
+}
+
+/**
+ * Menu function to send summary to Slack
+ */
+function menuSendDailySummaryToSlack() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Sending to Slack', 'Sending daily summary to Slack...\n\nThis may take a few moments.', ui.ButtonSet.OK);
+    
+    var result = sendDailySummaryToSlack();
+    
+    ui.alert('Slack Summary', result, ui.ButtonSet.OK);
+    
+  } catch (e) {
+    Logger.log('[ERROR] Error in menuSendDailySummaryToSlack: ' + e.message);
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Error', 'Failed to send summary to Slack: ' + e.message, ui.ButtonSet.OK);
+  }
+}
+
+/**
+ * TRIGGER function for automated daily summary to Slack
+ * This function is designed to be called by Google Apps Script scheduler
+ */
+function TRIGGER_sendDailySummaryToSlack() {
+  try {
+    Logger.log('[TRIGGER] Starting automated daily summary to Slack');
+    
+    // Generate and send summary to daily channel
+    var result = sendDailySummaryToSlack('daily');
+    
+    Logger.log('[TRIGGER] Daily summary result: ' + result);
+    
+    // Return success/failure for monitoring
+    return {
+      success: result.includes('successfully'),
+      message: result,
+      timestamp: new Date().toISOString()
+    };
+    
+  } catch (e) {
+    Logger.log('[TRIGGER] Error in automated daily summary: ' + e.message);
+    return {
+      success: false,
+      error: e.message,
+      timestamp: new Date().toISOString()
+    };
+  }
+}
+
+/**
+ * Menu function to set up Slack webhook for specific channel
+ */
+function menuSetupSlackCredentials() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    
+    // Select channel
+    var channelResponse = ui.prompt('Slack Setup', 'Select channel:\n\n1. daily\n\nEnter channel name:', ui.ButtonSet.OK_CANCEL);
+    if (channelResponse.getSelectedButton() === ui.Button.OK && channelResponse.getResponseText()) {
+      var channel = channelResponse.getResponseText().trim().toLowerCase();
+      
+      // Validate channel
+      if (channel !== 'daily') {
+        ui.alert('Error', 'Invalid channel. Please use: daily', ui.ButtonSet.OK);
+        return;
+      }
+      
+      // Get webhook URL
+      var webhookResponse = ui.prompt('Slack Setup - ' + channel, 'Enter your Slack webhook URL for ' + channel + ' channel:', ui.ButtonSet.OK_CANCEL);
+      if (webhookResponse.getSelectedButton() === ui.Button.OK && webhookResponse.getResponseText()) {
+        var webhookUrl = webhookResponse.getResponseText().trim();
+        
+        // Save webhook URL
+        var properties = PropertiesService.getScriptProperties();
+        properties.setProperty('SLACK_WEBHOOK_URL_' + channel.toUpperCase(), webhookUrl);
+        
+        ui.alert('Success', 'Slack webhook for ' + channel + ' saved successfully!', ui.ButtonSet.OK);
+        
+        // Test the connection
+        var testResult = sendSlackMessageWebhook('🧪 Test message from Torx Automation!', webhookUrl);
+        if (testResult) {
+          ui.alert('Test', 'Test message sent successfully! Check your ' + channel + ' Slack channel.', ui.ButtonSet.OK);
+        } else {
+          ui.alert('Test', 'Test message failed. Please check your webhook URL.', ui.ButtonSet.OK);
+        }
+        
+      } else {
+        ui.alert('Cancelled', 'Slack setup cancelled.', ui.ButtonSet.OK);
+      }
+    } else {
+      ui.alert('Cancelled', 'Slack setup cancelled.', ui.ButtonSet.OK);
+    }
+    
+  } catch (e) {
+    Logger.log('[ERROR] Error in menuSetupSlackCredentials: ' + e.message);
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Error', 'Failed to setup Slack webhook: ' + e.message, ui.ButtonSet.OK);
+  }
+}
+
+/**
+ * Menu function to send summary to specific Slack channel
+ */
+function menuSendSummaryToChannel(channel) {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Sending to Slack', 'Sending daily summary to Slack (' + channel + ')...\n\nThis may take a few moments.', ui.ButtonSet.OK);
+    
+    var result = sendDailySummaryToSlack(channel);
+    
+    ui.alert('Slack Summary', result, ui.ButtonSet.OK);
+    
+  } catch (e) {
+    Logger.log('[ERROR] Error in menuSendSummaryToChannel: ' + e.message);
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Error', 'Failed to send summary to Slack (' + channel + '): ' + e.message, ui.ButtonSet.OK);
+  }
+}
+
+/**
+ * Test Slack webhook connection
+ */
+function testSlackWebhook() {
+  try {
+    var properties = PropertiesService.getScriptProperties();
+    var webhookUrl = properties.getProperty('SLACK_WEBHOOK_URL_DAILY');
+    
+    if (!webhookUrl) {
+      Logger.log('[TEST] No webhook URL found');
+      return 'No webhook URL configured';
+    }
+    
+    Logger.log('[TEST] Testing webhook URL: ' + webhookUrl);
+    
+    var payload = {
+      'text': '🧪 Test message from Torx Automation - ' + new Date().toISOString()
+    };
+    
+    var options = {
+      'method': 'POST',
+      'contentType': 'application/json',
+      'payload': JSON.stringify(payload)
+    };
+    
+    var response = UrlFetchApp.fetch(webhookUrl, options);
+    var responseCode = response.getResponseCode();
+    var responseText = response.getContentText();
+    
+    Logger.log('[TEST] Response code: ' + responseCode);
+    Logger.log('[TEST] Response text: ' + responseText);
+    
+    if (responseCode === 200) {
+      return '✅ Webhook test successful! Response: ' + responseText;
+    } else {
+      return '❌ Webhook test failed. Code: ' + responseCode + ', Response: ' + responseText;
+    }
+    
+  } catch (e) {
+    Logger.log('[TEST] Error: ' + e.message);
+    return '❌ Webhook test error: ' + e.message;
+  }
+}
+
+/**
+ * Menu function to test Slack webhook
+ */
+function menuTestSlackWebhook() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Testing Webhook', 'Testing Slack webhook connection...\n\nThis may take a few moments.', ui.ButtonSet.OK);
+    
+    var result = testSlackWebhook();
+    
+    ui.alert('Webhook Test Result', result, ui.ButtonSet.OK);
+    
+  } catch (e) {
+    Logger.log('[ERROR] Error in menuTestSlackWebhook: ' + e.message);
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Error', 'Failed to test webhook: ' + e.message, ui.ButtonSet.OK);
+  }
+}
+
+/* ============== First Time Setup Function ============== */
+function firstTimeSetup() {
+  try {
+    // This function helps users authorize the script for the first time
+    var ui = SpreadsheetApp.getUi();
+    
+    // Test basic spreadsheet access
+    var sheet = SpreadsheetApp.getActiveSpreadsheet();
+    var sheetName = sheet.getName();
+    
+    // Test properties service
+    var props = PropertiesService.getScriptProperties();
+    props.setProperty('test_setup', 'completed');
+    var testValue = props.getProperty('test_setup');
+    
+    // Test URL fetch (simple test)
+    try {
+      var response = UrlFetchApp.fetch('https://httpbin.org/get', {
+        method: 'GET',
+        muteHttpExceptions: true
+      });
+      var statusCode = response.getResponseCode();
+    } catch (urlError) {
+      throw new Error('URL Fetch test failed: ' + urlError.toString());
+    }
+    
+    // Clean up test property
+    props.deleteProperty('test_setup');
+    
+    ui.alert(
+      '✅ Authorization Complete!',
+      'All required permissions have been granted successfully.\n\n' +
+      'You can now use all the banking and payment functions.\n\n' +
+      'Sheet: ' + sheetName + '\n' +
+      'URL Test: ' + statusCode + ' (OK)',
+      ui.ButtonSet.OK
+    );
+    
+  } catch (error) {
+    var ui = SpreadsheetApp.getUi();
+    ui.alert(
+      '❌ Authorization Required',
+      'Please complete the authorization process:\n\n' +
+      '1. Click "Review permissions" when prompted\n' +
+      '2. Select your Google account\n' +
+      '3. Click "Advanced" if needed\n' +
+      '4. Click "Go to [Script Name] (unsafe)"\n' +
+      '5. Click "Allow"\n\n' +
+      'Error: ' + error.toString(),
+      ui.ButtonSet.OK
+    );
+  }
+}
+
+/* ============== Torx Menu Handlers ============== */
+function menuGenerateDailySummary() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    
+    // Show progress message
+    ui.alert(
+      '📊 Generating Daily Summary',
+      'Generating daily summary and sending to Slack...',
+      ui.ButtonSet.OK
+    );
+    
+    // Generate the daily summary using the existing function
+    var summaryMessage = generateDailyWeeklySummary();
+    
+    // Send to Slack using the existing function
+    var slackResult = sendDailySummaryToSlack('daily');
+    
+    // Show success message
+    ui.alert(
+      '✅ Daily Summary Complete',
+      'Daily summary generated and sent to Slack successfully!\n\n' +
+      'Summary preview:\n' + summaryMessage.substring(0, 200) + '...\n\n' +
+      'Slack result: ' + slackResult,
+      ui.ButtonSet.OK
+    );
+    
+    Logger.log('[TORX] Daily summary generated and sent to Slack successfully');
+    
+  } catch (e) {
+    Logger.log('[ERROR] Error in menuGenerateDailySummary: ' + e.message);
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Error', 'Failed to generate daily summary: ' + e.message, ui.ButtonSet.OK);
+  }
+}
+
+function menuUpdateData() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    
+    // Show progress message
+    ui.alert(
+      '🔄 Updating Data',
+      'Updating all bank balances and expenses data...\n\nThis may take a few moments.',
+      ui.ButtonSet.OK
+    );
+    
+    var result = syncBanksData({
+      dryRun: false,
+      skipExpenses: false,
+      skipConsolidation: false,
+      skipPayoutReconciliation: false
+    });
+    
+    var message = '✅ Sync Complete!\n\n' +
+      'Status: ' + result.status + '\n' +
+      'Duration: ' + result.duration + ' ms\n\n' +
+      '📊 Summary:\n' +
+      '• Balances Updated: ' + result.summary.totalBalancesUpdated + '\n' +
+      '• Payouts Detected: ' + result.summary.totalPayoutsDetected + '\n' +
+      '• Payouts Reconciled: ' + result.summary.totalPayoutsReconciled + '\n' +
+      '• Funds Consolidated: $' + result.summary.totalFundsConsolidated + '\n' +
+      '• Expenses Calculated: ' + result.summary.totalExpensesCalculated + '\n\n' +
+      'Completed at: ' + new Date().toLocaleString();
+    
+    // Show success message
+    ui.alert(
+      '✅ Data Update Complete',
+      message,
+      ui.ButtonSet.OK
+    );
+    
+    Logger.log('[TORX] Data update completed successfully');
+    
+  } catch (e) {
+    Logger.log('[ERROR] Error in menuUpdateData: ' + e.message);
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Error', 'Failed to update data: ' + e.message, ui.ButtonSet.OK);
+  }
+}
+
+/* ============== Missing Menu Handler ============== */
+function menuSendSummaryToDaily() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    
+    // Show progress message
+    ui.alert(
+      '📤 Sending Summary to Daily',
+      'Sending daily summary to Slack daily channel...',
+      ui.ButtonSet.OK
+    );
+    
+    // Send to Slack using the existing function
+    var slackResult = sendDailySummaryToSlack('daily');
+    
+    // Show success message
+    ui.alert(
+      '✅ Summary Sent Successfully',
+      'Daily summary has been sent to Slack daily channel!\n\n' +
+      'Result: ' + slackResult,
+      ui.ButtonSet.OK
+    );
+    
+    Logger.log('[MENU] Daily summary sent to Slack successfully');
+    
+  } catch (e) {
+    Logger.log('[ERROR] Error in menuSendSummaryToDaily: ' + e.message);
+    var ui = SpreadsheetApp.getUi();
+    ui.alert('Error', 'Failed to send summary to daily: ' + e.message, ui.ButtonSet.OK);
+  }
+}

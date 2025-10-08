@@ -2,7 +2,6 @@
 import express from "express";
 import axios from "axios";
 import https from "https";
-import "dotenv/config";
 import { config } from "dotenv";
 config({ path: ".secrets/.env" });
 import fs from "fs";
@@ -1601,15 +1600,15 @@ app.post("/mercury/transfer", async (req, res) => {
           console.log(`[MERCURY] Trying endpoint: ${endpoint}`);
           
           const response = await axios.post(endpoint, transferPayload, {
-            headers: { 
-              'Content-Type': 'application/json',
-              'Accept': 'application/json'
-            },
-            auth: { username: MERCURY_API_TOKEN, password: "" },
-            timeout: 30000,
-            validateStatus: () => true
-          });
-          
+        headers: { 
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        auth: { username: MERCURY_API_TOKEN, password: "" },
+        timeout: 30000,
+        validateStatus: () => true
+      });
+      
           transferData = response.data;
           transferStatus = response.status;
           
@@ -1905,19 +1904,19 @@ app.post("/mercury/consolidate", async (req, res) => {
           console.log(`[MERCURY] Transfer response from ${endpoint}:`, transferStatus, transferData);
           
           if (transferStatus < 400) {
-            return res.json({
-              transfer: {
+    return res.json({
+      transfer: {
                 id: transferData.id || `consolidate-${Date.now()}`,
                 status: transferData.status || 'processing',
-                type: 'consolidation',
-                amount: amt,
-                currency: curr,
+        type: 'consolidation',
+        amount: amt,
+        currency: curr,
                 fromAccount: sourceAccount.name,
                 toAccount: destAccount.name,
-                reference: ref || '',
-                timestamp: new Date().toISOString()
-              },
-              success: true,
+        reference: ref || '',
+        timestamp: new Date().toISOString()
+      },
+      success: true,
               message: `Successfully initiated consolidation: $${amt} ${curr} from ${sourceAccount.name} to ${destAccount.name}`,
               endpoint: endpoint
             });
@@ -1972,9 +1971,18 @@ async function airwallexLogin() {
   
   console.log(`[AIRWALLEX] Attempting login with client_id: ${AW_CID.substring(0, 8)}...`);
   
+  // Airwallex requires credentials in headers, not body
   const { data, status } = await axios.post(`${AW_BASE}/api/v1/authentication/login`,
-    { client_id: AW_CID, api_key: AW_SEC },
-    { headers: { "content-type": "application/json" }, timeout: 15000, validateStatus: () => true }
+    {}, // Empty body as per Airwallex spec
+    { 
+      headers: { 
+        "content-type": "application/json",
+        "x-client-id": AW_CID,
+        "x-api-key": AW_SEC
+      }, 
+      timeout: 15000, 
+      validateStatus: () => true 
+    }
   );
   
   console.log(`[AIRWALLEX] Login response status: ${status}`);
@@ -2035,148 +2043,122 @@ app.get("/airwallex/transactions", async (req, res) => {
 
     const startDate = new Date(Number(year), Number(month) - 1, 1);
     const endDate = new Date(Number(year), Number(month), 0);
+    endDate.setHours(23, 59, 59, 999); // End of day
+    
+    console.log(`[AIRWALLEX] Fetching transactions for ${month}-${year} (${startDate.toISOString()} to ${endDate.toISOString()})`);
     
     const token = await airwallexLogin();
     
-    // Get accounts first
-    const { data: accountsData, status: accountsStatus } = await axios.get(`${AW_BASE}/api/v1/accounts`, {
-      headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
-      timeout: 15000,
-      validateStatus: () => true
-    });
+    // Use financial_transactions endpoint (issuing endpoint not available)
+    let allTransactions = [];
+    let page = 1;
+    const pageSize = 100;
+    const maxPages = 20;
     
-    if (accountsStatus !== 200) {
-      throw new Error(`Airwallex accounts ${accountsStatus}: ${JSON.stringify(accountsData)}`);
-    }
-
-    const accounts = Array.isArray(accountsData?.data) ? accountsData.data : [];
-    let cardExpenses = 0;
-    let waresoulTransfersOut = 0;
-    let waresoulTransfersIn = 0;
-    let nestorTransfersOut = 0;
-    let nestorTransfersIn = 0;
-    let otherTransfersOut = 0;
-    let otherTransfersIn = 0;
-    let cardDetails = [];
-    let waresoulTransferDetails = [];
-    let nestorTransferDetails = [];
-    let otherTransferDetails = [];
-
-    for (const account of accounts) {
-      if (!account.id) continue;
+    while (page <= maxPages) {
+      console.log(`[AIRWALLEX] Fetching page ${page} of financial transactions...`);
       
-      // Get transactions for this account
-      const { data: txData, status: txStatus } = await axios.get(`${AW_BASE}/api/v1/transactions`, {
+      const { data: txData, status: txStatus } = await axios.get(`${AW_BASE}/api/v1/financial_transactions`, {
         headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
         params: {
-          account_id: account.id,
-          from: startDate.toISOString(),
-          to: endDate.toISOString()
+          page: page,
+          page_size: pageSize,
+          from_created_at: startDate.toISOString().split('T')[0], // YYYY-MM-DD format
+          to_created_at: endDate.toISOString().split('T')[0]     // YYYY-MM-DD format
         },
         timeout: 15000,
         validateStatus: () => true
       });
-
-      if (txStatus === 200 && Array.isArray(txData?.data)) {
-        for (const tx of txData.data) {
-          const amount = Number(tx.amount || 0);
-          const isCard = tx.kind === 'debitCardTransaction' || tx.type === 'card_payment' || tx.category === 'card_payment' || 
-                        tx.description?.toLowerCase().includes('card') || 
-                        tx.merchant_name || tx.merchant_id;
-          const isTransfer = tx.kind === 'internalTransfer' || tx.type === 'transfer' || tx.category === 'transfer' || 
-                            tx.description?.toLowerCase().includes('transfer');
-
-          if (isCard && amount < 0) {
-            cardExpenses += Math.abs(amount);
-            cardDetails.push({
-              card: account.name || account.nickname || 'Unknown',
-              amount: Math.abs(amount),
-              description: tx.description || tx.merchant_name || 'Unknown',
-              date: tx.created_at || tx.date
-            });
-          } else if (isTransfer) {
-            // Categorize transfers into three groups
-            const isWaresoulTransfer = tx.description && 
-                                     (tx.description.toLowerCase().includes('waresoul') || 
-                                      tx.description.toLowerCase().includes('ware soul'));
-            
-            const isNestorTransfer = tx.description && 
-                                   tx.description.toLowerCase().includes('nestor garcia trabazo');
-
-            if (isWaresoulTransfer) {
-              if (amount < 0) {
-                waresoulTransfersOut += Math.abs(amount);
-                waresoulTransferDetails.push({
-                  type: 'out',
+    
+      console.log(`[AIRWALLEX] Page ${page} status: ${txStatus}`);
+      
+      if (txStatus !== 200) {
+        console.log(`[AIRWALLEX] Error fetching page ${page}: ${JSON.stringify(txData)}`);
+        break;
+      }
+      
+      const transactions = txData.items || [];
+      if (transactions.length === 0) {
+        console.log(`[AIRWALLEX] No more transactions on page ${page}`);
+        break;
+      }
+      
+      console.log(`[AIRWALLEX] Page ${page}: ${transactions.length} transactions`);
+      allTransactions = allTransactions.concat(transactions);
+      
+      if (!txData.has_more) {
+        console.log(`[AIRWALLEX] No more pages available`);
+        break;
+      }
+      
+      page++;
+    }
+    
+    console.log(`[AIRWALLEX] Total transactions fetched: ${allTransactions.length}`);
+    
+    // Filter transactions by date and type based on CSV data structure
+    const filteredTransactions = allTransactions.filter(tx => {
+      const txDate = new Date(tx.created_at || tx.settled_at);
+      const isInRange = txDate >= startDate && txDate <= endDate;
+      
+      // Debug: Log first few transactions to understand structure
+      if (allTransactions.indexOf(tx) < 3) {
+        console.log(`[AIRWALLEX] Sample transaction:`, {
+          id: tx.id,
+          created_at: tx.created_at,
+          settled_at: tx.settled_at,
+          source_type: tx.source_type,
+          transaction_type: tx.transaction_type,
+          type: tx.type,
+          amount: tx.amount,
+          description: tx.description?.substring(0, 50) + '...'
+        });
+      }
+      
+      return isInRange;
+    });
+    
+    console.log(`[AIRWALLEX] Filtered transactions for ${month}-${year}: ${filteredTransactions.length}`);
+    
+    let cardExpenses = 0;
+    let cardDetails = [];
+    
+    // Track processed transactions to avoid duplicates
+    const processedTransactions = new Set();
+    
+    for (const tx of filteredTransactions) {
+      const amount = Number(tx.amount || 0);
+      
+      // Only count ISSUING_CAPTURE transactions with SETTLED status (actual completed card purchases)
+      const isCardPurchase = tx.transaction_type === 'ISSUING_CAPTURE' && tx.status === 'SETTLED';
+      
+      // Create unique key for deduplication
+      const uniqueKey = tx.request_id || tx.source_id || tx.id || tx.transaction_id;
+      
+      if (isCardPurchase && amount < 0 && !processedTransactions.has(uniqueKey)) {
+        processedTransactions.add(uniqueKey);
+        cardExpenses += Math.abs(amount);
+        cardDetails.push({
+          card: 'Airwallex Card',
                   amount: Math.abs(amount),
-                  description: tx.description || 'Waresoul transfer out',
-                  date: tx.created_at || tx.date
-                });
-              } else {
-                waresoulTransfersIn += amount;
-                waresoulTransferDetails.push({
-                  type: 'in',
-                  amount: amount,
-                  description: tx.description || 'Waresoul transfer in',
-                  date: tx.created_at || tx.date
-                });
-              }
-            } else if (isNestorTransfer) {
-              if (amount < 0) {
-                nestorTransfersOut += Math.abs(amount);
-                nestorTransferDetails.push({
-                  type: 'out',
-                  amount: Math.abs(amount),
-                  description: tx.description || 'Nestor transfer out',
-                  date: tx.created_at || tx.date
-                });
-              } else {
-                nestorTransfersIn += amount;
-                nestorTransferDetails.push({
-                  type: 'in',
-                  amount: amount,
-                  description: tx.description || 'Nestor transfer in',
-                  date: tx.created_at || tx.date
-                });
-              }
-            } else {
-              if (amount < 0) {
-                otherTransfersOut += Math.abs(amount);
-                otherTransferDetails.push({
-                  type: 'out',
-                  amount: Math.abs(amount),
-                  description: tx.description || 'Other transfer out',
-                  date: tx.created_at || tx.date
-                });
-              } else {
-                otherTransfersIn += amount;
-                otherTransferDetails.push({
-                  type: 'in',
-                  amount: amount,
-                  description: tx.description || 'Other transfer in',
-                  date: tx.created_at || tx.date
-                });
-              }
-            }
-          }
-        }
+          description: tx.description || 'Card Purchase',
+          date: tx.created_at || tx.settled_at
+        });
+        console.log(`[AIRWALLEX] ✅ Card expense: $${Math.abs(amount)} - ${tx.description || 'Card Purchase'}`);
       }
     }
+    
+    console.log(`[AIRWALLEX] Summary: Card Expenses=$${cardExpenses}`);
 
     return res.json({
       month: Number(month),
       year: Number(year),
       cardExpenses: Math.round(cardExpenses * 100) / 100,
-      waresoulTransfersOut: Math.round(waresoulTransfersOut * 100) / 100,
-      waresoulTransfersIn: Math.round(waresoulTransfersIn * 100) / 100,
-      nestorTransfersOut: Math.round(nestorTransfersOut * 100) / 100,
-      nestorTransfersIn: Math.round(nestorTransfersIn * 100) / 100,
-      otherTransfersOut: Math.round(otherTransfersOut * 100) / 100,
-      otherTransfersIn: Math.round(otherTransfersIn * 100) / 100,
       cardDetails,
-      waresoulTransferDetails,
-      nestorTransferDetails,
-      otherTransferDetails
+      summary: {
+        totalCardExpenses: cardExpenses,
+        transactionCount: cardDetails.length
+      },
     });
   } catch (e) {
     console.error("Proxy error /airwallex/transactions:", e.message);
