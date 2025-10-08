@@ -130,7 +130,7 @@ function nowStamp_() {
 }
 
 function nowStampCell_() {
-  return Utilities.formatDate(new Date(), CURRENT_TIMEZONE, "MM-YY HH:MM");
+  return Utilities.formatDate(new Date(), CURRENT_TIMEZONE, "yyyy-MM-dd HH:mm");
 }
 
 function toBool_(value) {
@@ -183,13 +183,14 @@ function setCellKeepFmt_(sh, a1, value, note) {
     var rng = sh.getRange(a1);
     var fmt = rng.getNumberFormat();
     
-    if (value !== null && value !== undefined && value !== '') {
-      fmt = fmt.replace('#,##0.00', '#,##0.00').replace('###0.00', '#,##0.00');
+    if (value !== undefined) {
       rng.setValue(value);
       if (fmt) rng.setNumberFormat(fmt);
     }
     
-    if (note) {
+    if (note === null || note === '') {
+      rng.setNote('');
+    } else if (note) {
       var existingNote = rng.getNote() || '';
       var timestamp = nowStamp_();
       var newNote = existingNote ? existingNote + '\n' + timestamp + ': ' + note : timestamp + ': ' + note;
@@ -202,10 +203,17 @@ function setCellKeepFmt_(sh, a1, value, note) {
 
 function setNoteOnly_(sh, a1, note) {
   try {
+    var range = sh.getRange(a1);
+    
+    if (note === null) {
+      range.setNote('');
+      return;
+    }
+
     note = safeErrorNote_(note) || note;
-    var existingNote = sh.getRange(a1).getNote() || '';
+    var existingNote = range.getNote() || '';
     note = existingNote ? existingNote + '\n' + nowStamp_() + ': ' + note : nowStamp_() + ': ' + note;
-    sh.getRange(a1).setNote(note);
+    range.setNote(note);
   } catch (e) {
     Logger.log('[ERROR] setNoteOnly_ failed for %s: %s', a1, e.message);
   }
@@ -2963,11 +2971,15 @@ function updateBankBalances_(sh, dryRun) {
     // Update Mercury
     try {
       var mercurySummary = fetchMercurySummary_();
-      updateBankBalance_(sh, 'Mercury', mercurySummary, 'Mercury balance update');
+      updateBankBalance_(sh, 'Mercury', mercurySummary, mercurySummary && mercurySummary.error ? mercurySummary.error : null);
       result.updated++;
     } catch (e) {
       Logger.log('[ERROR] Mercury balance update failed: %s', e.message);
       result.errors.push('Mercury: ' + e.message);
+      var mercuryCells = CELLS['Mercury'];
+      if (mercuryCells && mercuryCells.USD) {
+        setNoteOnly_(sh, mercuryCells.USD, 'Error updating Mercury balance: ' + e.message);
+      }
     }
     
     // Skip Airwallex - preserve manually set balance
@@ -2976,34 +2988,53 @@ function updateBankBalances_(sh, dryRun) {
     // Update Revolut
     try {
       var revolutSummary = fetchRevolutSummary_();
-      updateBankBalance_(sh, 'Revolut', revolutSummary, 'Revolut balance update');
+      updateBankBalance_(sh, 'Revolut', revolutSummary, revolutSummary && revolutSummary.error ? revolutSummary.error : null);
       result.updated++;
     } catch (e) {
       Logger.log('[ERROR] Revolut balance update failed: %s', e.message);
       result.errors.push('Revolut: ' + e.message);
+      var revolutCells = CELLS['Revolut'];
+      if (revolutCells && revolutCells.USD) {
+        setNoteOnly_(sh, revolutCells.USD, 'Error updating Revolut balance: ' + e.message);
+      }
     }
     
     // Update Wise
     try {
       var wiseSummary = fetchWiseSummary_();
-      updateBankBalance_(sh, 'Wise', wiseSummary, 'Wise balance update');
+      updateBankBalance_(sh, 'Wise', wiseSummary, wiseSummary && wiseSummary.error ? wiseSummary.error : null);
       result.updated++;
     } catch (e) {
       Logger.log('[ERROR] Wise balance update failed: %s', e.message);
       result.errors.push('Wise: ' + e.message);
+      var wiseCells = CELLS['Wise'];
+      if (wiseCells && wiseCells.USD) {
+        setNoteOnly_(sh, wiseCells.USD, 'Error updating Wise balance: ' + e.message);
+      }
     }
     
     // Update Nexo (USD only)
     try {
       var nexoSummary = fetchNexoSummary_();
-      updateBankBalance_(sh, 'Nexo', { USD: nexoSummary.USD || 0 }, 'Nexo balance update');
+      updateBankBalance_(sh, 'Nexo', { USD: nexoSummary.USD || 0, error: nexoSummary.error }, nexoSummary && nexoSummary.error ? nexoSummary.error : null);
       result.updated++;
     } catch (e) {
       Logger.log('[ERROR] Nexo balance update failed: %s', e.message);
       result.errors.push('Nexo: ' + e.message);
+      var nexoCells = CELLS['Nexo'];
+      if (nexoCells && nexoCells.USD) {
+        setNoteOnly_(sh, nexoCells.USD, 'Error updating Nexo balance: ' + e.message);
+      }
     }
     
     Logger.log('[BALANCES] Updated %s bank balances', result.updated);
+    if (!dryRun) {
+      try {
+        sh.getRange(TS_CELL).setValue(nowStampCell_());
+      } catch (tsError) {
+        Logger.log('[WARNING] Failed to update timestamp cell %s: %s', TS_CELL, tsError.message);
+      }
+    }
     return result;
     
   } catch (e) {
@@ -4780,7 +4811,6 @@ function setProxyToken() {
   var props = PropertiesService.getScriptProperties();
   props.setProperty('PROXY_TOKEN', '8c92f4a0a1b9d3c4e6f7asdasd213w1sda2');
   props.setProperty('PROXY_URL', 'https://proxy.waresoul.org');
-  Logger.log('[PROXY] Set PROXY_TOKEN to 8c92f4a0a1b9d3c4e6f7asdasd213w1sda2 and PROXY_URL to https://proxy.waresoul.org');
 }
 
 // Minimal consolidation trigger
