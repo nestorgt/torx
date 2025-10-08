@@ -939,17 +939,16 @@ function airwallexAuthenticate_(clientId, clientSecret) {
     Logger.log('[AIRWALLEX] Attempting authentication with client ID: %s', clientId.substring(0, 8) + '...');
     
     var authUrl = 'https://api.airwallex.com/api/v1/authentication/login';
-    var payload = {
-      client_id: clientId,
-      api_key: clientSecret
-    };
     
+    // Airwallex requires credentials in headers, not body
     var options = {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        'x-client-id': clientId,
+        'x-api-key': clientSecret
       },
-      payload: JSON.stringify(payload),
+      payload: JSON.stringify({}), // Empty body as per Airwallex spec
       muteHttpExceptions: true
     };
     
@@ -975,7 +974,7 @@ function airwallexAuthenticate_(clientId, clientSecret) {
       };
     }
     
-    Logger.log('[AIRWALLEX] ✅ Authentication successful');
+    Logger.log('[AIRWALLEX] ✅ Authentication successful (using header-based auth)');
     
     // Cache token for future use (optional)
     setProp_('AIRWALLEX_TOKEN_TIMESTAMP', new Date().getTime().toString());
@@ -3523,6 +3522,8 @@ function onOpen() {
     .addItem('🧪 Test Unified Sync (Full)', 'testSyncFull')
     .addItem('🧪 Test Unified Sync (Dry Run)', 'testSyncDryRun')
     .addSeparator()
+    .addItem('🧪 Test Airwallex API', 'testAirwallexApiIntegration')
+    .addSeparator()
     .addItem('🧪 Test Sync Components', 'menuTestSyncBalancesOnly')
     .addToUi();
     
@@ -3891,6 +3892,80 @@ function getPaymentDataForMonth_(monthStr) {
   } catch (e) {
     Logger.log('[ERROR] Failed to get payment data: %s', e.message);
     return [];
+  }
+}
+
+/**
+ * Test Airwallex API integration with corrected header-based authentication
+ */
+function testAirwallexApiIntegration() {
+  Logger.log('=== TESTING AIRWALLEX API INTEGRATION ===');
+  
+  try {
+    // Get credentials from properties
+    var clientId = getProp_('AIRWALLEX_CLIENT_ID');
+    var clientSecret = getProp_('AIRWALLEX_CLIENT_SECRET');
+    
+    if (!clientId || !clientSecret) {
+      Logger.log('[ERROR] Airwallex credentials not found in properties');
+      return {
+        success: false,
+        error: 'Missing Airwallex credentials (AIRWALLEX_CLIENT_ID, AIRWALLEX_CLIENT_SECRET)'
+      };
+    }
+    
+    Logger.log('[TEST] Testing Airwallex authentication with header-based auth...');
+    
+    // Test authentication
+    var authResult = airwallexAuthenticate_(clientId, clientSecret);
+    
+    if (!authResult.success) {
+      Logger.log('[ERROR] Airwallex authentication failed: %s', authResult.error);
+      return {
+        success: false,
+        error: 'Authentication failed: ' + authResult.error
+      };
+    }
+    
+    Logger.log('[TEST] ✅ Authentication successful!');
+    Logger.log('[TEST] Token: %s...', authResult.token.substring(0, 20));
+    
+    // Test getting balances
+    Logger.log('[TEST] Testing balance retrieval...');
+    var balances = airwallexGetBalances_(authResult.token);
+    
+    if (balances && balances.length > 0) {
+      Logger.log('[TEST] ✅ Balance retrieval successful!');
+      Logger.log('[TEST] Found %s accounts', balances.length);
+      
+      for (var i = 0; i < balances.length; i++) {
+        var account = balances[i];
+        Logger.log('[TEST] Account: %s - %s %s', account.name, account.balance, account.currency);
+      }
+      
+      return {
+        success: true,
+        message: 'Airwallex API integration working correctly',
+        accounts: balances.length,
+        token: authResult.token.substring(0, 20) + '...'
+      };
+      
+    } else {
+      Logger.log('[WARNING] No balances returned, but authentication worked');
+      return {
+        success: true,
+        message: 'Authentication successful, but no balance data returned',
+        accounts: 0,
+        token: authResult.token.substring(0, 20) + '...'
+      };
+    }
+    
+  } catch (e) {
+    Logger.log('[ERROR] Airwallex API test failed: %s', e.message);
+    return {
+      success: false,
+      error: e.message
+    };
   }
 }
 
