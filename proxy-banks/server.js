@@ -2059,16 +2059,16 @@ app.get("/airwallex/transactions", async (req, res) => {
       console.log(`[AIRWALLEX] Fetching page ${page} of financial transactions...`);
       
       const { data: txData, status: txStatus } = await axios.get(`${AW_BASE}/api/v1/financial_transactions`, {
-        headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
         params: {
           page: page,
           page_size: pageSize,
           from_created_at: startDate.toISOString().split('T')[0], // YYYY-MM-DD format
           to_created_at: endDate.toISOString().split('T')[0]     // YYYY-MM-DD format
         },
-        timeout: 15000,
-        validateStatus: () => true
-      });
+      timeout: 15000,
+      validateStatus: () => true
+    });
     
       console.log(`[AIRWALLEX] Page ${page} status: ${txStatus}`);
       

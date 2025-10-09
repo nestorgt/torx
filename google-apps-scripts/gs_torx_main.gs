@@ -2895,7 +2895,7 @@ function syncBanksData(options) {
         result.summary.totalPayoutsDetected = payoutResult.detected;
         result.summary.totalPayoutsReconciled = payoutResult.reconciled;
         Logger.log('[STEP_2] ✅ Payouts processed: %s detected, %s reconciled', payoutResult.detected, payoutResult.reconciled);
-      } catch (e) {
+    } catch (e) {
         Logger.log('[ERROR] Step 2 failed: %s', e.message);
         result.steps.payouts.status = 'error';
         result.steps.payouts.errors.push(e.message);
@@ -2913,7 +2913,7 @@ function syncBanksData(options) {
         result.steps.consolidation = consolidationResult;
         result.summary.totalFundsConsolidated = consolidationResult.moved;
         Logger.log('[STEP_3] ✅ Fund consolidation completed: $%s moved', consolidationResult.moved);
-      } catch (e) {
+    } catch (e) {
         Logger.log('[ERROR] Step 3 failed: %s', e.message);
         result.steps.consolidation.status = 'error';
         result.steps.consolidation.errors.push(e.message);
@@ -3455,6 +3455,7 @@ function onOpen() {
     .addItem('📤 Send Summary to Daily', 'menuSendSummaryToDaily')
     .addItem('🧪 Test Slack Webhook', 'menuTestSlackWebhook')
     .addItem('⚙️ Setup Slack Credentials', 'menuSetupSlackCredentials')
+    .addItem('🗑️ Clear Snapshot Data', 'menuClearSnapshotData')
     .addSeparator()
     // Expense Calculations
     .addSubMenu(ui.createMenu('📊 Expense Calculations')
@@ -5782,6 +5783,8 @@ function reconcileTransferWithSpreadsheet(receivedAmount, bankName, accountName)
       
       // Mark as received
       sheet.getRange(reconcileRow, 8).setValue(true); // Column H - Check the checkbox
+      var referenceValue = sheet.getRange(reconcileRow, 1).getValue();
+      sendPaymentsReceivedNotification([{ reference: referenceValue, amount: receivedAmount }]);
       
       // Add adjustment note if needed
       if (Math.abs(adjustmentAmount) > 10) { // Only note significant adjustments
@@ -5885,6 +5888,8 @@ function reconcilePayoutWithSpreadsheet(receivedAmount, bankName) {
       
       // Mark as received
       sheet.getRange(reconcileRow, 8).setValue(true); // Column H - Check the checkbox
+      var referenceValue = sheet.getRange(reconcileRow, 1).getValue();
+      sendPaymentsReceivedNotification([{ reference: referenceValue, amount: receivedAmount }]);
       
       // Add adjustment note if needed
       if (Math.abs(adjustmentAmount) > 10) { // Only note significant adjustments
@@ -6830,23 +6835,18 @@ function parseNumber(value) {
 /**
  * Save daily snapshot of current data for comparison
  */
-function saveDailySnapshot(summary, currentMonth, currentYear) {
+function saveDailySnapshot(metrics, currentMonth, currentYear) {
   try {
     var today = new Date();
     var dateStr = today.getFullYear() + '-' + (today.getMonth() + 1).toString().padStart(2, '0') + '-' + today.getDate().toString().padStart(2, '0');
     
-    // Store in PropertiesService for persistence
     var properties = PropertiesService.getScriptProperties();
-    var snapshotKey = 'daily_snapshot_' + dateStr;
-    
-    var snapshot = {
-      date: dateStr,
-      month: currentMonth,
-      year: currentYear,
-      data: summary.currentDay
-    };
-    
-    properties.setProperty(snapshotKey, JSON.stringify(snapshot));
+    var snapshotsJson = properties.getProperty('daily_snapshot_collection');
+    var snapshots = snapshotsJson ? JSON.parse(snapshotsJson) : {};
+    var snapshotData = cloneMetrics(metrics);
+    snapshots[dateStr] = snapshotData;
+    properties.setProperty('daily_snapshot_collection', JSON.stringify(snapshots));
+    properties.setProperty('daily_snapshot_' + dateStr, JSON.stringify({ date: dateStr, month: currentMonth, year: currentYear, data: snapshotData }));
     Logger.log('[SNAPSHOT] Saved daily snapshot for ' + dateStr);
     
   } catch (e) {
@@ -6862,23 +6862,156 @@ function loadPreviousDaySnapshot(currentMonth, currentYear) {
     var yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
     var dateStr = yesterday.getFullYear() + '-' + (yesterday.getMonth() + 1).toString().padStart(2, '0') + '-' + yesterday.getDate().toString().padStart(2, '0');
-    
-    var properties = PropertiesService.getScriptProperties();
-    var snapshotKey = 'daily_snapshot_' + dateStr;
-    var snapshotData = properties.getProperty(snapshotKey);
-    
-    if (snapshotData) {
-      var snapshot = JSON.parse(snapshotData);
+    var snapshot = loadSnapshotForDate(dateStr);
+    if (snapshot) {
       Logger.log('[SNAPSHOT] Loaded previous day snapshot for ' + dateStr);
-      return snapshot.data;
-    } else {
-      Logger.log('[SNAPSHOT] No previous day snapshot found for ' + dateStr);
-      return null;
+      return snapshot;
     }
-    
+    Logger.log('[SNAPSHOT] No previous day snapshot found for ' + dateStr);
+    return null;
   } catch (e) {
     Logger.log('[ERROR] Failed to load previous day snapshot: ' + e.message);
     return null;
+  }
+}
+
+function loadSnapshotForDate(dateObj) {
+  try {
+    var dateStr = typeof dateObj === 'string'
+      ? dateObj
+      : (dateObj.getFullYear() + '-' + (dateObj.getMonth() + 1).toString().padStart(2, '0') + '-' + dateObj.getDate().toString().padStart(2, '0'));
+    var properties = PropertiesService.getScriptProperties();
+    var snapshotsJson = properties.getProperty('daily_snapshot_collection');
+    if (!snapshotsJson) {
+      return null;
+    }
+    var snapshots = JSON.parse(snapshotsJson);
+    return snapshots[dateStr] || null;
+  } catch (e) {
+    Logger.log('[ERROR] Failed to load snapshot for given date: ' + e.message);
+    return null;
+  }
+}
+
+function createEmptyMetrics() {
+  return {
+    farmed: 0,
+    pending: 0,
+    payouts: 0,
+    balance: 0,
+    expenses: 0,
+    day1: 0,
+    day2: 0,
+    funded: 0
+  };
+}
+
+function cloneMetrics(data) {
+  var metrics = createEmptyMetrics();
+  if (!data) {
+    return metrics;
+  }
+  metrics.farmed = Number(data.farmed || 0);
+  metrics.pending = Number(data.pending || 0);
+  metrics.payouts = Number(data.payouts || 0);
+  metrics.balance = Number(data.balance || 0);
+  metrics.expenses = Number(data.expenses || 0);
+  metrics.day1 = Number(data.day1 || 0);
+  metrics.day2 = Number(data.day2 || 0);
+  metrics.funded = Number(data.funded || 0);
+  return metrics;
+}
+
+function sanitizeMetrics(data) {
+  var metrics = createEmptyMetrics();
+  if (!data) {
+    return metrics;
+  }
+  metrics.farmed = Number(data.farmed || 0);
+  metrics.pending = Number(data.pending || 0);
+  metrics.payouts = Number(data.payouts || 0);
+  metrics.balance = Number(data.balance || 0);
+  metrics.expenses = Number(data.expenses || 0);
+  metrics.day1 = Number(data.day1 || 0);
+  metrics.day2 = Number(data.day2 || 0);
+  metrics.funded = Number(data.funded || 0);
+  return metrics;
+}
+
+function addMetrics(target, source) {
+  if (!source) return target;
+  target.farmed += Number(source.farmed || 0);
+  target.pending += Number(source.pending || 0);
+  target.payouts += Number(source.payouts || 0);
+  target.balance += Number(source.balance || 0);
+  target.expenses += Number(source.expenses || 0);
+  target.day1 += Number(source.day1 || 0);
+  target.day2 += Number(source.day2 || 0);
+  target.funded += Number(source.funded || 0);
+  return target;
+}
+
+function formatValue(isMoney, current, previous, options) {
+  options = options || {};
+  var showTotal = !!options.showTotal;
+  var includeDifference = options.includeDifference !== false;
+  current = Number(current || 0);
+  previous = Number(previous || 0);
+  var diff = current - previous;
+  var sign = diff >= 0 ? '+' : '';
+  var formattedDiff;
+
+  if (isMoney) {
+    formattedDiff = sign + '$' + Math.abs(diff).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  } else {
+    formattedDiff = sign + Math.abs(diff).toLocaleString('en-US');
+  }
+
+  if (showTotal) {
+    var formattedCurrent;
+    if (isMoney) {
+      formattedCurrent = '$' + current.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    } else {
+      formattedCurrent = current.toLocaleString('en-US');
+    }
+    if (!includeDifference) {
+      return formattedCurrent;
+    }
+    if (formattedDiff.length === 0 || (formattedDiff[0] !== '+' && formattedDiff[0] !== '-')) {
+      formattedDiff = (diff >= 0 ? '+' : '-') + formattedDiff.replace(/^[-+]/, '');
+    }
+    return formattedCurrent + '   ' + formattedDiff;
+  }
+
+  return formattedDiff;
+}
+
+/**
+ * Clear all snapshot data (for testing/first-time setup)
+ */
+function clearAllSnapshotData() {
+  try {
+    var properties = PropertiesService.getScriptProperties();
+    
+    // Get all properties
+    var allProperties = properties.getProperties();
+    var keysToDelete = [];
+    
+    // Find all snapshot-related keys
+    for (var key in allProperties) {
+      if (key.startsWith('daily_snapshot_') || key === 'daily_snapshot_collection') {
+        keysToDelete.push(key);
+      }
+    }
+    
+    // Delete all snapshot keys
+    properties.deleteProperties(keysToDelete);
+    
+    Logger.log('[CLEAR] Deleted %s snapshot properties: %s', keysToDelete.length, keysToDelete.join(', '));
+    return 'Cleared ' + keysToDelete.length + ' snapshot properties: ' + keysToDelete.join(', ');
+  } catch (e) {
+    Logger.log('[ERROR] Failed to clear snapshot data: ' + e.message);
+    return 'Error clearing snapshot data: ' + e.message;
   }
 }
 
@@ -6911,6 +7044,38 @@ function sendSlackMessageWebhook(message, webhookUrl) {
   } catch (e) {
     Logger.log('[SLACK] Error sending message via webhook: ' + e.message);
     return false;
+  }
+}
+
+function sendPaymentsReceivedNotification(notifications) {
+  try {
+    if (!notifications || notifications.length === 0) {
+      return { sent: false, reason: 'No notifications queued' };
+    }
+
+    var properties = PropertiesService.getScriptProperties();
+    var webhookUrl = properties.getProperty('SLACK_WEBHOOK_URL_BANK_CARDS');
+
+    if (!webhookUrl) {
+      Logger.log('[SLACK] Missing bank-cards webhook URL');
+      return { sent: false, reason: 'Missing webhook URL' };
+    }
+
+    var messageLines = ['💵 Payments received:'];
+    notifications.forEach(function(entry) {
+      var reference = entry.reference || 'Unknown';
+      var amount = Number(entry.amount || 0);
+      var formattedAmount = '$' + Math.abs(amount).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+      messageLines.push('• ' + reference + ' · ' + formattedAmount);
+    });
+
+    var message = messageLines.join('\n');
+    var sent = sendSlackMessageWebhook(message, webhookUrl);
+    Logger.log('[SLACK] Payments received notification sent: ' + sent);
+    return { sent: sent, message: message };
+  } catch (e) {
+    Logger.log('[SLACK] Error sending payments notification: ' + e.message);
+    return { sent: false, error: e.message };
   }
 }
 
@@ -7019,36 +7184,14 @@ function generateDailyWeeklySummary() {
     var allData = sheet.getRange(1, 1, lastRow, lastCol).getValues();
 
     var summary = {
-      currentDay: {
-        farmed: 0,
-        pending: 0,
-        payouts: 0,
-        balance: 0,
-        expenses: 0,
-        day1: 0,
-        day2: 0,
-        funded: 0
-      },
-      previousDay: {
-        farmed: 0,
-        pending: 0,
-        payouts: 0,
-        balance: 0,
-        expenses: 0,
-        day1: 0,
-        day2: 0,
-        funded: 0
-      },
-      weekAccumulated: {
-        farmed: 0,
-        pending: 0,
-        payouts: 0,
-        balance: 0,
-        expenses: 0,
-        day1: 0,
-        day2: 0,
-        funded: 0
-      }
+      currentDay: createEmptyMetrics(),
+      previousDay: createEmptyMetrics(),
+      weekCurrent: createEmptyMetrics(),
+      weekPrevious: createEmptyMetrics(),
+      monthCurrent: createEmptyMetrics(),
+      monthPrevious: createEmptyMetrics(),
+      hasPreviousDaySnapshot: false,
+      hasPreviousWeekSnapshot: false
     };
 
     var currentMonthStr = currentYear + '-' + currentMonth.toString().padStart(2, '0');
@@ -7085,25 +7228,104 @@ function generateDailyWeeklySummary() {
       Logger.log('[SUMMARY] Error reading current month row %s: %s', currentMonthRow, sheetErr.message);
     }
 
-    summary.previousDay.farmed = summary.currentDay.farmed;
-    summary.previousDay.pending = summary.currentDay.pending;
-    summary.previousDay.payouts = summary.currentDay.payouts;
-    summary.previousDay.balance = summary.currentDay.balance;
-    summary.previousDay.expenses = summary.currentDay.expenses;
-    summary.previousDay.day1 = summary.currentDay.day1;
-    summary.previousDay.day2 = summary.currentDay.day2;
-    summary.previousDay.funded = summary.currentDay.funded;
+    var previousSnapshot = loadSnapshotForDate(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1));
+    summary.previousDay = sanitizeMetrics(previousSnapshot);
+    summary.hasPreviousDaySnapshot = !!previousSnapshot;
+    
+    // Debug logging
+    if (!previousSnapshot) {
+      summary.previousDay = cloneMetrics(summary.currentDay);
+      Logger.log('[SUMMARY] No previous day snapshot – using current day as baseline');
+    } else {
+      summary.hasPreviousDaySnapshot = true;
+    }
 
-    saveDailySnapshot(summary, currentMonth, currentYear);
+    // Week accumulation: sum daily snapshots from Monday to today
+    var weekMetrics = createEmptyMetrics();
+    for (var offset = 0; offset <= 6; offset++) {
+      var weekDate = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + offset);
+      if (weekDate > now) {
+        continue;
+      }
+      
+      // Check if this is today - use current day data
+      if (weekDate.getFullYear() === now.getFullYear() && weekDate.getMonth() === now.getMonth() && weekDate.getDate() === now.getDate()) {
+        addMetrics(weekMetrics, summary.currentDay);
+      } else {
+        // Use historical snapshot for other days
+        var snapshot = loadSnapshotForDate(weekDate);
+        if (snapshot) {
+          addMetrics(weekMetrics, snapshot);
+        }
+      }
+    }
+    summary.weekCurrent = weekMetrics;
+    
+    // Week comparison: compare current week total vs previous week's Friday total
+    var prevWeekMetrics = createEmptyMetrics();
+    var prevWeekStart = new Date(weekStart);
+    prevWeekStart.setDate(prevWeekStart.getDate() - 7);
+    var prevWeekEnd = new Date(prevWeekStart);
+    prevWeekEnd.setDate(prevWeekEnd.getDate() + 4); // Friday of previous week
+    
+    // Sum up the previous week (Monday to Friday)
+    for (var prevOffset = 0; prevOffset <= 4; prevOffset++) {
+      var prevDate = new Date(prevWeekStart.getFullYear(), prevWeekStart.getMonth(), prevWeekStart.getDate() + prevOffset);
+      var prevSnapshot = loadSnapshotForDate(prevDate);
+      if (prevSnapshot) {
+        addMetrics(prevWeekMetrics, prevSnapshot);
+      }
+    }
+    summary.weekPrevious = prevWeekMetrics;
+    summary.hasPreviousWeekSnapshot = Object.values(prevWeekMetrics).some(function(val) { return val !== 0; });
 
-    summary.weekAccumulated.farmed = 0;
-    summary.weekAccumulated.pending = 0;
-    summary.weekAccumulated.payouts = 0;
-    summary.weekAccumulated.balance = 0;
-    summary.weekAccumulated.expenses = 0;
-    summary.weekAccumulated.day1 = 0;
-    summary.weekAccumulated.day2 = 0;
-    summary.weekAccumulated.funded = 0;
+    // Month comparison: load previous month's data
+    var previousMonth = currentMonth === 1 ? 12 : currentMonth - 1;
+    var previousYear = currentMonth === 1 ? currentYear - 1 : currentYear;
+    var previousMonthStr = previousYear + '-' + previousMonth.toString().padStart(2, '0');
+    var previousMonthRow = -1;
+
+    for (var row = 7; row <= lastRow; row++) {
+      try {
+        var monthValue = sheet.getRange(row, 1).getValue();
+        if (monthValue && String(monthValue).includes(previousMonthStr)) {
+          previousMonthRow = row;
+          Logger.log('[SUMMARY] Found previous month row: %s for %s', previousMonthRow, previousMonthStr);
+          break;
+        }
+      } catch (innerErr) {
+        Logger.log('[SUMMARY] Error reading previous month at row %s: %s', row, innerErr.message);
+      }
+    }
+
+    if (previousMonthRow === -1) {
+      Logger.log('[SUMMARY] Using fallback row %s for previous month %s', currentMonthRow - 1, previousMonthStr);
+      previousMonthRow = currentMonthRow - 1;
+    }
+
+    try {
+      summary.monthCurrent.farmed = Number(sheet.getRange(currentMonthRow, 2).getValue()) || 0;
+      summary.monthCurrent.payouts = Number(sheet.getRange(currentMonthRow, 3).getValue()) || 0;
+      summary.monthCurrent.balance = Number(sheet.getRange(currentMonthRow, 4).getValue()) || 0;
+      summary.monthCurrent.expenses = Number(sheet.getRange(currentMonthRow, 5).getValue()) || 0;
+      summary.monthCurrent.day1 = Number(sheet.getRange(currentMonthRow, 11).getValue()) || 0;
+      summary.monthCurrent.day2 = Number(sheet.getRange(currentMonthRow, 12).getValue()) || 0;
+      summary.monthCurrent.funded = Number(sheet.getRange(currentMonthRow, 13).getValue()) || 0;
+      summary.monthCurrent.pending = Number(sheet.getRange('G21').getValue()) || 0;
+
+      summary.monthPrevious.farmed = Number(sheet.getRange(previousMonthRow, 2).getValue()) || 0;
+      summary.monthPrevious.payouts = Number(sheet.getRange(previousMonthRow, 3).getValue()) || 0;
+      summary.monthPrevious.balance = Number(sheet.getRange(previousMonthRow, 4).getValue()) || 0;
+      summary.monthPrevious.expenses = Number(sheet.getRange(previousMonthRow, 5).getValue()) || 0;
+      summary.monthPrevious.day1 = Number(sheet.getRange(previousMonthRow, 11).getValue()) || 0;
+      summary.monthPrevious.day2 = Number(sheet.getRange(previousMonthRow, 12).getValue()) || 0;
+      summary.monthPrevious.funded = Number(sheet.getRange(previousMonthRow, 13).getValue()) || 0;
+      summary.monthPrevious.pending = 20000; // Default for previous month
+    } catch (monthErr) {
+      Logger.log('[SUMMARY] Error reading month data: %s', monthErr.message);
+    }
+
+    saveDailySnapshot(summary.currentDay, currentMonth, currentYear);
 
     var message = generateSlackSummaryMessage(summary, today, currentMonth, currentYear);
     Logger.log('[SUMMARY] Generated summary message (%s chars)', message.length);
@@ -7119,46 +7341,53 @@ function generateDailyWeeklySummary() {
  */
 function generateSlackSummaryMessage(summary, today, currentMonth, currentYear) {
   var message = '';
-  
-  // Header
-  message += '📅 *' + today + '/' + currentMonth + '/' + currentYear + '*\n\n';
-  
-  // Calculate week number
   var now = new Date();
   var start = new Date(now.getFullYear(), 0, 1);
   var diff = now - start;
   var oneWeek = 1000 * 60 * 60 * 24 * 7;
   var weekNumber = Math.floor(diff / oneWeek) + 1;
-  
-  // Month name
   var monthNames = ['', 'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
   var monthName = monthNames[currentMonth];
-  
-  // Today
-  message += '*Today*\n';
-  message += formatDifferenceLine('💰 Farmed', summary.currentDay.farmed, summary.previousDay.farmed);
-  message += formatDifferenceLine('⏳ Pending', summary.currentDay.pending, summary.previousDay.pending);
-  message += formatDifferenceLine('💸 Payouts', summary.currentDay.payouts, summary.previousDay.payouts);
-  message += formatDifferenceLine('🏦 Balance', summary.currentDay.balance, summary.previousDay.balance);
-  message += formatDifferenceLine('💳 Expenses', summary.currentDay.expenses, summary.previousDay.expenses);
-  message += formatDifferenceLine('1️⃣ Day 1', summary.currentDay.day1, summary.previousDay.day1, true);
-  message += formatDifferenceLine('2️⃣ Day 2', summary.currentDay.day2, summary.previousDay.day2, true);
-  message += formatDifferenceLine('✅ Funded', summary.currentDay.funded, summary.previousDay.funded, true);
-  message += '\n';
-  
-  // Week
-  message += '*Week ' + weekNumber + '*\n';
-  message += formatAccumulatedLine('💰 Farmed', summary.weekAccumulated.farmed);
-  message += formatAccumulatedLine('⏳ Pending', summary.weekAccumulated.pending);
-  message += formatAccumulatedLine('💸 Payouts', summary.weekAccumulated.payouts);
-  message += formatAccumulatedLine('🏦 Balance', summary.weekAccumulated.balance);
-  message += formatAccumulatedLine('💳 Expenses', summary.weekAccumulated.expenses);
-  message += formatAccumulatedLine('1️⃣ Day 1', summary.weekAccumulated.day1, true);
-  message += formatAccumulatedLine('2️⃣ Day 2', summary.weekAccumulated.day2, true);
-  message += formatAccumulatedLine('✅ Funded', summary.weekAccumulated.funded, true);
-  message += '\n';
-  
-  
+  var weekCurrent = summary.weekCurrent || createEmptyMetrics();
+  var weekPrevious = summary.weekPrevious || createEmptyMetrics();
+  var monthCurrent = summary.monthCurrent || summary.currentDay;
+  var monthPrevious = summary.monthPrevious || summary.previousDay;
+
+  message += '📅 *' + today + '/' + currentMonth + '/' + currentYear + '*\n\n';
+
+  var metrics = [
+    { label: '💰 Farmed', field: 'farmed', money: true },
+    { label: '⏳ Pending', field: 'pending', money: true },
+    { label: '💸 Payouts', field: 'payouts', money: true },
+    { label: '🏦 Balance', field: 'balance', money: true },
+    { label: '💳 Expenses', field: 'expenses', money: true },
+    { label: '1️⃣ Day 1', field: 'day1', money: false },
+    { label: '2️⃣ Day 2', field: 'day2', money: false },
+    { label: '✅ Funded', field: 'funded', money: false }
+  ];
+
+  metrics.forEach(function(metric) {
+    var dayCurrent = summary.currentDay[metric.field] || 0;
+    var dayPrevious = summary.previousDay[metric.field] || 0;
+    var weekCurrentValue = weekCurrent[metric.field] || 0;
+    var weekPreviousValue = weekPrevious[metric.field] || 0;
+    var monthCurrentValue = monthCurrent[metric.field] || dayCurrent;
+    var monthPreviousValue = monthPrevious[metric.field] || dayPrevious;
+
+    if (!summary.hasPreviousDaySnapshot) {
+      dayPrevious = dayCurrent;
+    }
+
+    if (!summary.hasPreviousWeekSnapshot) {
+      weekPreviousValue = weekCurrentValue;
+    }
+
+    message += metric.label + ':\n';
+    message += '• Day:     ' + formatValue(metric.money, dayCurrent, dayPrevious) + '\n';
+    message += '• Week:   ' + formatValue(metric.money, weekCurrentValue, weekPreviousValue) + '\n';
+    message += '• Month:   ' + formatValue(metric.money, monthCurrentValue, monthPreviousValue, { showTotal: true, includeDifference: false }) + '\n\n';
+  });
+
   return message;
 }
 
@@ -7383,6 +7612,18 @@ function testSlackWebhook() {
   } catch (e) {
     Logger.log('[TEST] Error: ' + e.message);
     return '❌ Webhook test error: ' + e.message;
+  }
+}
+
+/**
+ * Menu handler to clear snapshot data
+ */
+function menuClearSnapshotData() {
+  try {
+    var result = clearAllSnapshotData();
+    SpreadsheetApp.getUi().alert('Snapshot Data Cleared', result, SpreadsheetApp.getUi().ButtonSet.OK);
+  } catch (e) {
+    SpreadsheetApp.getUi().alert('Error', 'Failed to clear snapshot data: ' + e.message, SpreadsheetApp.getUi().ButtonSet.OK);
   }
 }
 
