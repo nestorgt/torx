@@ -3049,11 +3049,31 @@ function detectAndReconcilePayouts_(dryRun) {
     status: 'success',
     detected: 0,
     reconciled: 0,
+    transactionDetected: 0,
+    transactionReconciled: 0,
     errors: []
   };
   
   try {
     Logger.log('[TRANSFERS] Detecting all incoming transfers on non-Main USD accounts...');
+
+    var processedTxnState = {
+      data: loadProcessedPayoutTransactions_(),
+      changed: false
+    };
+
+    // Optional: fetch recent transactions from Mercury for logging purposes
+    try {
+      Logger.log('[TRANSFERS] Fetching recent Mercury transactions for audit...');
+      var recentTxns = httpProxyJson_('/mercury/recent-transactions?limit=25');
+      if (recentTxns && recentTxns.transactions) {
+        recentTxns.transactions.slice(0, 5).forEach(function(tx) {
+          Logger.log('[MERCURY_TX] %s | %s | %s %s', tx.postedAt || tx.createdAt || 'Unknown date', tx.accountName || 'Unknown account', tx.amount || '0', tx.amountCurrency || '');
+        });
+      }
+    } catch (txErr) {
+      Logger.log('[TRANSFERS] Warning: Unable to fetch recent Mercury transactions: %s', txErr.message);
+    }
     
     // Check Mercury accounts
     try {
@@ -3142,7 +3162,23 @@ function detectAndReconcilePayouts_(dryRun) {
       result.errors.push('Revolut detection: ' + e.message);
     }
     
+    // Process recent Mercury transactions to ensure payouts are reconciled even after balances move
+    try {
+      processMercuryTransactionsForPayouts_(dryRun, result, processedTxnState);
+    } catch (merTxErr) {
+      Logger.log('[TRANSFERS] Warning: Mercury transaction processing failed: %s', merTxErr.message);
+      result.errors.push('Mercury transaction processing: ' + merTxErr.message);
+    }
+
+    // Persist processed transaction ids
+    if (!dryRun && processedTxnState.changed) {
+      saveProcessedPayoutTransactions_(processedTxnState.data);
+    }
+
     Logger.log('[TRANSFERS] Transfer detection completed: %s detected, %s reconciled', result.detected, result.reconciled);
+    if (result.transactionDetected || result.transactionReconciled) {
+      Logger.log('[TRANSFERS] Transaction-level reconciliation: %s detected, %s reconciled', result.transactionDetected, result.transactionReconciled);
+    }
     return result;
     
   } catch (e) {
@@ -3448,6 +3484,7 @@ function onOpen() {
     .addItem('🧪 Test Balances Only', 'menuTestSyncBalancesOnly')
     .addItem('🧪 Test Payouts Only', 'menuTestSyncPayoutsOnly')
     .addItem('🧪 Test Expenses Only', 'menuTestSyncExpensesOnly')
+    .addItem('🧪 Test Mark Payout Received', 'menuTestMarkPayoutReceived')
     .addSeparator()
     // Balance Monitoring
     .addItem('📊 Show Balance Summary', 'menuShowBalanceSummary')
@@ -6307,6 +6344,53 @@ function menuTestSyncPayoutsOnly() {
   }
 }
 
+function menuTestMarkPayoutReceived() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Payouts');
+    if (!sheet) {
+      ui.alert('Error', 'Payouts sheet not found.', ui.ButtonSet.OK);
+      return;
+    }
+
+    var amountResponse = ui.prompt('Test Mark Payout as Received', 'Enter the received amount (numbers only):', ui.ButtonSet.OK_CANCEL);
+    if (amountResponse.getSelectedButton() !== ui.Button.OK) {
+      return;
+    }
+    var amountText = amountResponse.getResponseText();
+    if (!amountText) {
+      ui.alert('Invalid Input', 'Amount is required.', ui.ButtonSet.OK);
+      return;
+    }
+    var amount = parseFloat(amountText.replace(/[^0-9.\-]/g, ''));
+    if (isNaN(amount) || amount <= 0) {
+      ui.alert('Invalid Input', 'Please enter a valid numeric amount greater than 0.', ui.ButtonSet.OK);
+      return;
+    }
+
+    var bankResponse = ui.prompt('Bank Name', 'Enter the bank name (e.g., Mercury):', ui.ButtonSet.OK_CANCEL);
+    if (bankResponse.getSelectedButton() !== ui.Button.OK) {
+      return;
+    }
+    var bankName = (bankResponse.getResponseText() || '').trim();
+    if (!bankName) {
+      ui.alert('Invalid Input', 'Bank name is required.', ui.ButtonSet.OK);
+      return;
+    }
+
+    var result = reconcilePayoutWithSpreadsheet(amount, bankName);
+    if (result && result.success) {
+      ui.alert('Mark Payout as Received', 'Success! ' + result.message, ui.ButtonSet.OK);
+    } else {
+      var errorMessage = (result && result.error) ? result.error : 'No matching payout found or operation failed.';
+      ui.alert('Mark Payout as Received', errorMessage, ui.ButtonSet.OK);
+    }
+  } catch (e) {
+    Logger.log('[ERROR] menuTestMarkPayoutReceived failed: %s', e.message);
+    SpreadsheetApp.getUi().alert('Error', 'Failed to test mark payout as received: ' + e.message, SpreadsheetApp.getUi().ButtonSet.OK);
+  }
+}
+
 function menuTestSyncConsolidationOnly() {
   try {
     var ui = SpreadsheetApp.getUi();
@@ -6951,6 +7035,19 @@ function addMetrics(target, source) {
   return target;
 }
 
+function subtractMetrics(target, source) {
+  if (!source) return target;
+  target.farmed -= Number(source.farmed || 0);
+  target.pending -= Number(source.pending || 0);
+  target.payouts -= Number(source.payouts || 0);
+  target.balance -= Number(source.balance || 0);
+  target.expenses -= Number(source.expenses || 0);
+  target.day1 -= Number(source.day1 || 0);
+  target.day2 -= Number(source.day2 || 0);
+  target.funded -= Number(source.funded || 0);
+  return target;
+}
+
 function formatValue(isMoney, current, previous, options) {
   options = options || {};
   var showTotal = !!options.showTotal;
@@ -6958,7 +7055,7 @@ function formatValue(isMoney, current, previous, options) {
   current = Number(current || 0);
   previous = Number(previous || 0);
   var diff = current - previous;
-  var sign = diff >= 0 ? '+' : '';
+  var sign = diff >= 0 ? '+' : (diff < 0 ? '-' : '+');
   var formattedDiff;
 
   if (isMoney) {
@@ -7234,13 +7331,13 @@ function generateDailyWeeklySummary() {
     
     // Debug logging
     if (!previousSnapshot) {
-      summary.previousDay = cloneMetrics(summary.currentDay);
-      Logger.log('[SUMMARY] No previous day snapshot – using current day as baseline');
+      summary.previousDay = createEmptyMetrics(); // Use zeros as baseline for first day
+      Logger.log('[SUMMARY] No previous day snapshot – using zeros as baseline');
     } else {
       summary.hasPreviousDaySnapshot = true;
     }
 
-    // Week accumulation: sum daily snapshots from Monday to today
+    // Week accumulation: sum daily deltas from Monday to today
     var weekMetrics = createEmptyMetrics();
     for (var offset = 0; offset <= 6; offset++) {
       var weekDate = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + offset);
@@ -7248,16 +7345,30 @@ function generateDailyWeeklySummary() {
         continue;
       }
       
-      // Check if this is today - use current day data
+      // Get snapshot for this day
+      var daySnapshot;
       if (weekDate.getFullYear() === now.getFullYear() && weekDate.getMonth() === now.getMonth() && weekDate.getDate() === now.getDate()) {
-        addMetrics(weekMetrics, summary.currentDay);
+        daySnapshot = summary.currentDay;
       } else {
-        // Use historical snapshot for other days
-        var snapshot = loadSnapshotForDate(weekDate);
-        if (snapshot) {
-          addMetrics(weekMetrics, snapshot);
-        }
+        daySnapshot = loadSnapshotForDate(weekDate);
       }
+      
+      if (!daySnapshot) {
+        continue;
+      }
+      
+      // Calculate daily delta by subtracting previous day's snapshot
+      var prevDate = new Date(weekDate);
+      prevDate.setDate(weekDate.getDate() - 1);
+      var prevSnapshot = loadSnapshotForDate(prevDate);
+      
+      var dayDelta = cloneMetrics(daySnapshot);
+      if (prevSnapshot) {
+        subtractMetrics(dayDelta, prevSnapshot);
+      }
+      
+      // Add daily delta to week accumulation
+      addMetrics(weekMetrics, dayDelta);
     }
     summary.weekCurrent = weekMetrics;
     
@@ -7374,17 +7485,9 @@ function generateSlackSummaryMessage(summary, today, currentMonth, currentYear) 
     var monthCurrentValue = monthCurrent[metric.field] || dayCurrent;
     var monthPreviousValue = monthPrevious[metric.field] || dayPrevious;
 
-    if (!summary.hasPreviousDaySnapshot) {
-      dayPrevious = dayCurrent;
-    }
-
-    if (!summary.hasPreviousWeekSnapshot) {
-      weekPreviousValue = weekCurrentValue;
-    }
-
     message += metric.label + ':\n';
     message += '• Day:     ' + formatValue(metric.money, dayCurrent, dayPrevious) + '\n';
-    message += '• Week:   ' + formatValue(metric.money, weekCurrentValue, weekPreviousValue) + '\n';
+    message += '• Week:   ' + formatValue(metric.money, weekCurrentValue, 0) + '\n';
     message += '• Month:   ' + formatValue(metric.money, monthCurrentValue, monthPreviousValue, { showTotal: true, includeDifference: false }) + '\n\n';
   });
 
