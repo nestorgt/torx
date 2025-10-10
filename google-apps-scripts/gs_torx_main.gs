@@ -6982,6 +6982,7 @@ function createEmptyMetrics() {
     farmed: 0,
     pending: 0,
     payouts: 0,
+    pendingPayouts: 0,
     balance: 0,
     expenses: 0,
     day1: 0,
@@ -6998,6 +6999,7 @@ function cloneMetrics(data) {
   metrics.farmed = Number(data.farmed || 0);
   metrics.pending = Number(data.pending || 0);
   metrics.payouts = Number(data.payouts || 0);
+  metrics.pendingPayouts = Number(data.pending || 0) + Number(data.payouts || 0);
   metrics.balance = Number(data.balance || 0);
   metrics.expenses = Number(data.expenses || 0);
   metrics.day1 = Number(data.day1 || 0);
@@ -7014,6 +7016,7 @@ function sanitizeMetrics(data) {
   metrics.farmed = Number(data.farmed || 0);
   metrics.pending = Number(data.pending || 0);
   metrics.payouts = Number(data.payouts || 0);
+  metrics.pendingPayouts = Number(data.pending || 0) + Number(data.payouts || 0);
   metrics.balance = Number(data.balance || 0);
   metrics.expenses = Number(data.expenses || 0);
   metrics.day1 = Number(data.day1 || 0);
@@ -7027,6 +7030,7 @@ function addMetrics(target, source) {
   target.farmed += Number(source.farmed || 0);
   target.pending += Number(source.pending || 0);
   target.payouts += Number(source.payouts || 0);
+  target.pendingPayouts += Number(source.pendingPayouts || 0);
   target.balance += Number(source.balance || 0);
   target.expenses += Number(source.expenses || 0);
   target.day1 += Number(source.day1 || 0);
@@ -7040,6 +7044,7 @@ function subtractMetrics(target, source) {
   target.farmed -= Number(source.farmed || 0);
   target.pending -= Number(source.pending || 0);
   target.payouts -= Number(source.payouts || 0);
+  target.pendingPayouts -= Number(source.pendingPayouts || 0);
   target.balance -= Number(source.balance || 0);
   target.expenses -= Number(source.expenses || 0);
   target.day1 -= Number(source.day1 || 0);
@@ -7321,6 +7326,7 @@ function generateDailyWeeklySummary() {
       summary.currentDay.day2 = Number(sheet.getRange(currentMonthRow, 12).getValue()) || 0;
       summary.currentDay.funded = Number(sheet.getRange(currentMonthRow, 13).getValue()) || 0;
       summary.currentDay.pending = Number(sheet.getRange('G21').getValue()) || 0;
+      summary.currentDay.pendingPayouts = summary.currentDay.pending + summary.currentDay.payouts;
     } catch (sheetErr) {
       Logger.log('[SUMMARY] Error reading current month row %s: %s', currentMonthRow, sheetErr.message);
     }
@@ -7423,6 +7429,7 @@ function generateDailyWeeklySummary() {
       summary.monthCurrent.day2 = Number(sheet.getRange(currentMonthRow, 12).getValue()) || 0;
       summary.monthCurrent.funded = Number(sheet.getRange(currentMonthRow, 13).getValue()) || 0;
       summary.monthCurrent.pending = Number(sheet.getRange('G21').getValue()) || 0;
+      summary.monthCurrent.pendingPayouts = summary.monthCurrent.pending + summary.monthCurrent.payouts;
 
       summary.monthPrevious.farmed = Number(sheet.getRange(previousMonthRow, 2).getValue()) || 0;
       summary.monthPrevious.payouts = Number(sheet.getRange(previousMonthRow, 3).getValue()) || 0;
@@ -7432,6 +7439,7 @@ function generateDailyWeeklySummary() {
       summary.monthPrevious.day2 = Number(sheet.getRange(previousMonthRow, 12).getValue()) || 0;
       summary.monthPrevious.funded = Number(sheet.getRange(previousMonthRow, 13).getValue()) || 0;
       summary.monthPrevious.pending = 20000; // Default for previous month
+      summary.monthPrevious.pendingPayouts = summary.monthPrevious.pending + summary.monthPrevious.payouts;
     } catch (monthErr) {
       Logger.log('[SUMMARY] Error reading month data: %s', monthErr.message);
     }
@@ -7468,8 +7476,7 @@ function generateSlackSummaryMessage(summary, today, currentMonth, currentYear) 
 
   var metrics = [
     { label: '💰 Farmed', field: 'farmed', money: true },
-    { label: '⏳ Pending', field: 'pending', money: true },
-    { label: '💸 Payouts', field: 'payouts', money: true },
+    { label: '💸 Pending + Payouts', field: 'pendingPayouts', money: true },
     { label: '🏦 Balance', field: 'balance', money: true },
     { label: '💳 Expenses', field: 'expenses', money: true },
     { label: '1️⃣ Day 1', field: 'day1', money: false },
