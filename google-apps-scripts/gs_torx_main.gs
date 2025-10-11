@@ -8245,23 +8245,22 @@ function menuFon() {
 
 function showMultiLineDialog(promptText) {
   /*
-   * Show a dialog with better multi-line input support
-   * Uses a larger prompt dialog with instructions for multi-line input
+   * Show a dialog with multi-line text input using a large prompt
+   * Google Apps Script prompts do support multi-line input when you press Enter
    */
   try {
     var ui = SpreadsheetApp.getUi();
     
-    // Create a more detailed prompt with instructions
+    // Create a detailed prompt that encourages multi-line input
     var message = promptText + '\n\n' +
                  'Instructions:\n' +
-                 '• Enter multiple accounts separated by commas\n' +
-                 '• Or press Enter for new lines\n' +
-                 '• Example: T-10-Nestor, T-12-Juan, T-15-Maria\n' +
-                 '• Or:\n' +
+                 '• Press Enter to create new lines\n' +
+                 '• Enter one account per line\n' +
+                 '• Example:\n' +
                  '  T-10-Nestor\n' +
                  '  T-12-Juan\n' +
                  '  T-15-Maria\n\n' +
-                 'Enter your funded accounts:';
+                 'Enter your funded accounts (press Enter for new lines):';
     
     var response = ui.prompt(
       '🪖 Fon - Funded Accounts',
@@ -8275,14 +8274,13 @@ function showMultiLineDialog(promptText) {
     
     var input = response.getResponseText().trim();
     
-    // Process the input to handle both comma-separated and line-separated values
+    // Process the input to clean up and format
     if (input) {
-      // Split by both commas and newlines, then clean up
-      var accounts = input.split(/[,\n]/)
+      // Split by newlines and clean up each line
+      var accounts = input.split('\n')
         .map(function(account) { return account.trim(); })
         .filter(function(account) { return account.length > 0; });
       
-      // Join back with newlines for better formatting in Slack
       return accounts.join('\n');
     }
     
