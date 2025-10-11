@@ -8245,26 +8245,40 @@ function menuFon() {
 
 function showMultiLineDialog(promptText) {
   /*
-   * Show a dialog with multi-line text input using a large prompt
-   * Google Apps Script prompts do support multi-line input when you press Enter
+   * Show a custom HTML dialog with true multi-line textarea input
+   * Uses a synchronous approach to get the result
    */
   try {
+    var html = HtmlService.createHtmlOutputFromFile('fon-dialog')
+      .setWidth(500)
+      .setHeight(400);
+    
     var ui = SpreadsheetApp.getUi();
+    ui.showModalDialog(html, '🪖 Fon - Funded Accounts');
     
-    // Create a detailed prompt that encourages multi-line input
-    var message = promptText + '\n\n' +
-                 'Instructions:\n' +
-                 '• Press Enter to create new lines\n' +
-                 '• Enter one account per line\n' +
-                 '• Example:\n' +
-                 '  T-10-Nestor\n' +
-                 '  T-12-Juan\n' +
-                 '  T-15-Maria\n\n' +
-                 'Enter your funded accounts (press Enter for new lines):';
+    // The HTML dialog will call processFundedAccounts when user clicks OK/Cancel
+    // We need to wait for the result
+    var maxWait = 30; // Maximum wait time in seconds
+    var waitTime = 0;
     
+    while (fundedAccountsResult === undefined && waitTime < maxWait) {
+      Utilities.sleep(100); // Wait 100ms
+      waitTime += 0.1;
+    }
+    
+    var result = fundedAccountsResult;
+    fundedAccountsResult = undefined; // Reset for next use
+    
+    return result;
+    
+  } catch (e) {
+    Logger.log('[ERROR] Multi-line dialog failed: %s', e.message);
+    
+    // Fallback to simple prompt
+    var ui = SpreadsheetApp.getUi();
     var response = ui.prompt(
       '🪖 Fon - Funded Accounts',
-      message,
+      promptText + '\n\n(Enter multiple lines separated by commas)',
       ui.ButtonSet.OK_CANCEL
     );
     
@@ -8272,24 +8286,18 @@ function showMultiLineDialog(promptText) {
       return null;
     }
     
-    var input = response.getResponseText().trim();
-    
-    // Process the input to clean up and format
-    if (input) {
-      // Split by newlines and clean up each line
-      var accounts = input.split('\n')
-        .map(function(account) { return account.trim(); })
-        .filter(function(account) { return account.length > 0; });
-      
-      return accounts.join('\n');
-    }
-    
-    return input;
-    
-  } catch (e) {
-    Logger.log('[ERROR] Multi-line dialog failed: %s', e.message);
-    return null;
+    return response.getResponseText().trim();
   }
+}
+
+var fundedAccountsResult = undefined;
+
+function processFundedAccounts(input) {
+  /*
+   * Process the funded accounts input from the HTML dialog
+   * This function is called by the HTML dialog when user clicks OK/Cancel
+   */
+  fundedAccountsResult = input;
 }
 
 function getSlackWebhookUrl(channel) {
