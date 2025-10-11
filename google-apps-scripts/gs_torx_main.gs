@@ -3473,7 +3473,7 @@ function onOpen() {
   ui.createMenu('⚙️ Torx')
     .addItem('📤 Send Summary to Slack', 'menuSendSummaryToDaily')
     .addItem('🔄 Update All Data', 'menuUpdateData')
-    .addItem('Fon', 'menuFon')
+    .addItem('🪖 Fon', 'menuFon')
     .addToUi();
   
   ui.createMenu('🏦 Banking')
@@ -8151,20 +8151,15 @@ function menuFon() {
   try {
     var ui = SpreadsheetApp.getUi();
     
-    // Step 1: Ask for funded accounts used today
-    var fundedAccountsResponse = ui.prompt(
-      'Fon - Funded Accounts',
-      'Funded accounts used today:',
-      ui.ButtonSet.OK_CANCEL
-    );
+    // Step 1: Ask for funded accounts used today (multi-line input)
+    var fundedAccounts = showMultiLineDialog('Funded accounts used today:');
     
-    if (fundedAccountsResponse.getSelectedButton() !== ui.Button.OK) {
+    if (fundedAccounts === null) {
       ui.alert('Fon Cancelled', 'Operation cancelled by user.', ui.ButtonSet.OK);
       return;
     }
     
-    var fundedAccounts = fundedAccountsResponse.getResponseText().trim();
-    if (!fundedAccounts) {
+    if (!fundedAccounts || fundedAccounts.trim() === '') {
       ui.alert('Fon Error', 'Please enter the funded accounts used today.', ui.ButtonSet.OK);
       return;
     }
@@ -8245,6 +8240,57 @@ function menuFon() {
   } catch (e) {
     Logger.log('[ERROR] Fon workflow failed: %s', e.message);
     SpreadsheetApp.getUi().alert('❌ Fon Error', 'Fon workflow failed:\n\n' + e.message, SpreadsheetApp.getUi().ButtonSet.OK);
+  }
+}
+
+function showMultiLineDialog(promptText) {
+  /*
+   * Show a dialog with better multi-line input support
+   * Uses a larger prompt dialog with instructions for multi-line input
+   */
+  try {
+    var ui = SpreadsheetApp.getUi();
+    
+    // Create a more detailed prompt with instructions
+    var message = promptText + '\n\n' +
+                 'Instructions:\n' +
+                 '• Enter multiple accounts separated by commas\n' +
+                 '• Or press Enter for new lines\n' +
+                 '• Example: T-10-Nestor, T-12-Juan, T-15-Maria\n' +
+                 '• Or:\n' +
+                 '  T-10-Nestor\n' +
+                 '  T-12-Juan\n' +
+                 '  T-15-Maria\n\n' +
+                 'Enter your funded accounts:';
+    
+    var response = ui.prompt(
+      '🪖 Fon - Funded Accounts',
+      message,
+      ui.ButtonSet.OK_CANCEL
+    );
+    
+    if (response.getSelectedButton() !== ui.Button.OK) {
+      return null;
+    }
+    
+    var input = response.getResponseText().trim();
+    
+    // Process the input to handle both comma-separated and line-separated values
+    if (input) {
+      // Split by both commas and newlines, then clean up
+      var accounts = input.split(/[,\n]/)
+        .map(function(account) { return account.trim(); })
+        .filter(function(account) { return account.length > 0; });
+      
+      // Join back with newlines for better formatting in Slack
+      return accounts.join('\n');
+    }
+    
+    return input;
+    
+  } catch (e) {
+    Logger.log('[ERROR] Multi-line dialog failed: %s', e.message);
+    return null;
   }
 }
 
