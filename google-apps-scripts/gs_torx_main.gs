@@ -5754,20 +5754,20 @@ function reconcileTransferWithSpreadsheet(receivedAmount, bankName, accountName)
       return { success: false, error: 'Payouts sheet not found' };
     }
     
-    // Get the data from A23 downwards (User, Platform, Account ID, Month, Day, Amount, Received)
+    // Get the data from A22 downwards (User, Platform, Account ID, Month, Day, Amount, Received)
     var lastRow = sheet.getLastRow();
-    if (lastRow < 23) {
+    if (lastRow < 22) {
       Logger.log('[ERROR] No payout data found (sheet too short)');
       return { success: false, error: 'No payout data found' };
     }
     
-    var payoutData = sheet.getRange(23, 1, lastRow - 22, 8).getValues();
+    var payoutData = sheet.getRange(22, 1, lastRow - 21, 8).getValues();
     Logger.log('[TRANSFER_RECONCILE] Checking ' + payoutData.length + ' payout entries...');
     
     // Debug: Show first few entries to understand the data structure
     for (var d = 0; d < Math.min(5, payoutData.length); d++) {
       var debugRow = payoutData[d];
-      Logger.log('[TRANSFER_RECONCILE] DEBUG Row ' + (d + 23) + ': User="' + debugRow[0] + '", Platform="' + debugRow[1] + '", Amount=' + debugRow[6] + ', Received=' + debugRow[7] + ' (checkbox)');
+      Logger.log('[TRANSFER_RECONCILE] DEBUG Row ' + (d + 22) + ': User="' + debugRow[0] + '", Platform="' + debugRow[1] + '", Amount=' + debugRow[6] + ', Received=' + debugRow[7] + ' (checkbox)');
       // Debug all columns to find the correct amount column
       Logger.log('[TRANSFER_RECONCILE] DEBUG All columns: A="' + debugRow[0] + '", B="' + debugRow[1] + '", C="' + debugRow[2] + '", D="' + debugRow[3] + '", E="' + debugRow[4] + '", F="' + debugRow[5] + '", G="' + debugRow[6] + '", H="' + debugRow[7] + '"');
     }
@@ -5795,16 +5795,16 @@ function reconcileTransferWithSpreadsheet(receivedAmount, bankName, accountName)
       var expectedCalc = calculateExpectedPayoutAmount_(platform, baseAmount);
       
       // Debug logging for troubleshooting
-      Logger.log('[TRANSFER_RECONCILE] Row ' + (i + 23) + ': Platform="' + platform + '", Base=$' + baseAmount + ', Expected=$' + expectedCalc.expected + ', Range=$' + expectedCalc.min + '-$' + expectedCalc.max + ', Received=$' + receivedAmount);
+      Logger.log('[TRANSFER_RECONCILE] Row ' + (i + 22) + ': Platform="' + platform + '", Base=$' + baseAmount + ', Expected=$' + expectedCalc.expected + ', Range=$' + expectedCalc.min + '-$' + expectedCalc.max + ', Received=$' + receivedAmount);
       
       // Check if received amount matches expected range
       if (receivedAmount >= expectedCalc.min && receivedAmount <= expectedCalc.max) {
         var score = 1 - Math.abs(receivedAmount - expectedCalc.expected) / expectedCalc.expected;
-        Logger.log('[TRANSFER_RECONCILE] ✅ MATCH: Row ' + (i + 23) + ': Platform=' + platform + ', Base=$' + baseAmount + ', Expected=' + expectedCalc.expected + ', Score=' + score.toFixed(3));
+        Logger.log('[TRANSFER_RECONCILE] ✅ MATCH: Row ' + (i + 22) + ': Platform=' + platform + ', Base=$' + baseAmount + ', Expected=' + expectedCalc.expected + ', Score=' + score.toFixed(3));
         
         if (score > bestMatch.score) {
           bestMatch = { 
-            row: i + 23, 
+            row: i + 22, 
             score: score, 
             adjustment: receivedAmount - baseAmount,
             platform: platform,
@@ -5870,14 +5870,14 @@ function reconcilePayoutWithSpreadsheet(receivedAmount, bankName) {
       return { success: false, error: 'Payouts sheet not found' };
     }
     
-    // Get the data from A23 downwards (User, Platform, Account ID, Month, Day, Amount, Received)
+    // Get the data from A22 downwards (User, Platform, Account ID, Month, Day, Amount, Received)
     var lastRow = sheet.getLastRow();
-    if (lastRow < 23) {
+    if (lastRow < 22) {
       Logger.log('[ERROR] No payout data found (sheet too short)');
       return { success: false, error: 'No payout data found' };
     }
     
-    var payoutData = sheet.getRange(23, 1, lastRow - 22, 8).getValues();
+    var payoutData = sheet.getRange(22, 1, lastRow - 21, 8).getValues();
     Logger.log('[PAYOUT_RECONCILE] Checking ' + payoutData.length + ' payout entries...');
     
     var bestMatch = { row: -1, score: 0, adjustment: 0 };
@@ -5905,11 +5905,11 @@ function reconcilePayoutWithSpreadsheet(receivedAmount, bankName) {
       // Check if received amount matches expected range
       if (receivedAmount >= expectedCalc.min && receivedAmount <= expectedCalc.max) {
         var score = 1 - Math.abs(receivedAmount - expectedCalc.expected) / expectedCalc.expected;
-        Logger.log('[PAYOUT_RECONCILE] Row ' + (i + 23) + ': Platform=' + platform + ', Base=$' + baseAmount + ', Expected=' + expectedCalc.expected + ', Score=' + score.toFixed(3));
+        Logger.log('[PAYOUT_RECONCILE] Row ' + (i + 22) + ': Platform=' + platform + ', Base=$' + baseAmount + ', Expected=' + expectedCalc.expected + ', Score=' + score.toFixed(3));
         
         if (score > bestMatch.score) {
           bestMatch = { 
-            row: i + 23, 
+            row: i + 22, 
             score: score, 
             adjustment: receivedAmount - baseAmount,
             platform: platform,
@@ -5962,6 +5962,110 @@ function reconcilePayoutWithSpreadsheet(receivedAmount, bankName) {
   } catch (e) {
     Logger.log('[ERROR] Payout reconciliation failed: %s', e.message);
     return { success: false, error: e.message };
+  }
+}
+
+function processMercuryTransactionsForPayouts_(dryRun, result, processedTxnState) {
+  /*
+   * Process recent Mercury transactions to reconcile payouts
+   * This ensures payouts are detected even after balances have been moved
+   */
+  try {
+    Logger.log('[MERCURY_TX_PROCESSING] Fetching recent Mercury transactions for payout reconciliation...');
+    
+    var recentTxns = httpProxyJson_('/mercury/recent-transactions?limit=50');
+    if (!recentTxns || !recentTxns.transactions) {
+      Logger.log('[MERCURY_TX_PROCESSING] No recent transactions found');
+      return;
+    }
+    
+    Logger.log('[MERCURY_TX_PROCESSING] Processing %s recent transactions...', recentTxns.transactions.length);
+    
+    for (var i = 0; i < recentTxns.transactions.length; i++) {
+      var tx = recentTxns.transactions[i];
+      var amount = Number(tx.amount || 0);
+      var currency = tx.amountCurrency || 'USD';
+      var accountName = tx.accountName || 'Unknown';
+      var transactionId = tx.id || tx.transactionId || 'unknown';
+      
+      // Skip non-USD transactions
+      if (currency.toUpperCase() !== 'USD') continue;
+      
+      // Skip outgoing transactions (negative amounts)
+      if (amount <= 0) continue;
+      
+      // Skip Main account transactions
+      if (accountName.toLowerCase().includes('main')) continue;
+      
+      // Skip already processed transactions
+      if (processedTxnState.data.has(transactionId)) {
+        Logger.log('[MERCURY_TX_PROCESSING] Skipping already processed transaction: %s', transactionId);
+        continue;
+      }
+      
+      Logger.log('[MERCURY_TX_PROCESSING] Processing incoming transaction: $%s USD on %s (ID: %s)', amount, accountName, transactionId);
+      result.transactionDetected++;
+      
+      if (!dryRun) {
+        try {
+          var reconciliationResult = reconcilePayoutWithSpreadsheet(amount, 'Mercury');
+          if (reconciliationResult.success) {
+            result.transactionReconciled++;
+            Logger.log('[MERCURY_TX_PROCESSING] ✅ Transaction reconciled: %s', reconciliationResult.message);
+            
+            // Mark transaction as processed
+            processedTxnState.data.add(transactionId);
+            processedTxnState.changed = true;
+          } else {
+            Logger.log('[MERCURY_TX_PROCESSING] ⚠️ Transaction not reconciled: %s', reconciliationResult.error);
+          }
+        } catch (e) {
+          Logger.log('[ERROR] Mercury transaction reconciliation failed: %s', e.message);
+          result.errors.push('Mercury transaction reconciliation: ' + e.message);
+        }
+      }
+    }
+    
+    // Save processed transaction state if changed
+    if (processedTxnState.changed) {
+      saveProcessedPayoutTransactions_(processedTxnState.data);
+    }
+    
+  } catch (e) {
+    Logger.log('[ERROR] Mercury transaction processing failed: %s', e.message);
+    result.errors.push('Mercury transaction processing: ' + e.message);
+  }
+}
+
+function loadProcessedPayoutTransactions_() {
+  /*
+   * Load the set of processed transaction IDs from PropertiesService
+   */
+  try {
+    var properties = PropertiesService.getScriptProperties();
+    var data = properties.getProperty('processed_payout_transactions');
+    if (!data) {
+      return new Set();
+    }
+    var transactionIds = JSON.parse(data);
+    return new Set(transactionIds);
+  } catch (e) {
+    Logger.log('[ERROR] Failed to load processed payout transactions: %s', e.message);
+    return new Set();
+  }
+}
+
+function saveProcessedPayoutTransactions_(transactionSet) {
+  /*
+   * Save the set of processed transaction IDs to PropertiesService
+   */
+  try {
+    var properties = PropertiesService.getScriptProperties();
+    var transactionIds = Array.from(transactionSet);
+    properties.setProperty('processed_payout_transactions', JSON.stringify(transactionIds));
+    Logger.log('[PROCESSED_TXNS] Saved %s processed transaction IDs', transactionIds.length);
+  } catch (e) {
+    Logger.log('[ERROR] Failed to save processed payout transactions: %s', e.message);
   }
 }
 
