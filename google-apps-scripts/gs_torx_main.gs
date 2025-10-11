@@ -3473,6 +3473,7 @@ function onOpen() {
   ui.createMenu('⚙️ Torx')
     .addItem('📤 Send Summary to Slack', 'menuSendSummaryToDaily')
     .addItem('🔄 Update All Data', 'menuUpdateData')
+    .addItem('Fon', 'menuFon')
     .addToUi();
   
   ui.createMenu('🏦 Banking')
@@ -8140,6 +8141,124 @@ function menuUpdateData() {
     Logger.log('[ERROR] Error in menuUpdateData: ' + e.message);
     var ui = SpreadsheetApp.getUi();
     ui.alert('Error', 'Failed to update data: ' + e.message, ui.ButtonSet.OK);
+  }
+}
+
+function menuFon() {
+  /*
+   * Fon workflow: Complete data update + reconciliation + consolidation + Slack notification + funded accounts
+   */
+  try {
+    var ui = SpreadsheetApp.getUi();
+    
+    // Step 1: Ask for funded accounts used today
+    var fundedAccountsResponse = ui.prompt(
+      'Fon - Funded Accounts',
+      'Funded accounts used today:',
+      ui.ButtonSet.OK_CANCEL
+    );
+    
+    if (fundedAccountsResponse.getSelectedButton() !== ui.Button.OK) {
+      ui.alert('Fon Cancelled', 'Operation cancelled by user.', ui.ButtonSet.OK);
+      return;
+    }
+    
+    var fundedAccounts = fundedAccountsResponse.getResponseText().trim();
+    if (!fundedAccounts) {
+      ui.alert('Fon Error', 'Please enter the funded accounts used today.', ui.ButtonSet.OK);
+      return;
+    }
+    
+    ui.alert('Fon Starting', 'Starting Fon workflow...\n\n1. Updating all data\n2. Reconciling payments\n3. Moving money to Main\n4. Sending Slack notification\n5. Adding funded accounts info', ui.ButtonSet.OK);
+    
+    // Step 2: Execute update all data
+    Logger.log('[FON] Step 1: Updating all data...');
+    var updateResult = syncBanksData({
+      dryRun: false,
+      skipExpenses: false,
+      skipConsolidation: false,
+      skipPayoutReconciliation: false
+    });
+    
+    if (updateResult.errors && updateResult.errors.length > 0) {
+      Logger.log('[FON] Update completed with errors: %s', updateResult.errors.join(', '));
+    } else {
+      Logger.log('[FON] Step 1 completed successfully');
+    }
+    
+    // Step 3: Execute bank reconciliation and mark payments as received
+    Logger.log('[FON] Step 2: Reconciling payments and moving money to Main...');
+    var reconciliationResult = detectAndReconcilePayouts_(false); // false = not dry run
+    
+    if (reconciliationResult.errors && reconciliationResult.errors.length > 0) {
+      Logger.log('[FON] Reconciliation completed with errors: %s', reconciliationResult.errors.join(', '));
+    } else {
+      Logger.log('[FON] Step 2 completed successfully');
+    }
+    
+    // Step 4: Send Slack message
+    Logger.log('[FON] Step 3: Sending Slack notification...');
+    var slackResult = sendDailySummaryToSlack('daily');
+    
+    if (slackResult.success) {
+      Logger.log('[FON] Step 3 completed successfully - Slack message sent');
+      
+      // Step 5: Send additional Slack message with funded accounts
+      Logger.log('[FON] Step 4: Sending funded accounts info to Slack...');
+      var fundedMessage = '📊 *Funded Accounts Used Today:*\n' + fundedAccounts;
+      var fundedSlackResult = sendSlackMessageWebhook(fundedMessage, getSlackWebhookUrl('daily'));
+      
+      if (fundedSlackResult) {
+        Logger.log('[FON] Step 4 completed successfully - Funded accounts info sent');
+      } else {
+        Logger.log('[FON] Step 4 failed - Could not send funded accounts info');
+      }
+    } else {
+      Logger.log('[FON] Step 3 failed - Could not send Slack notification: %s', slackResult.error || 'Unknown error');
+    }
+    
+    // Step 6: Show completion message
+    var completionMessage = '✅ Fon Workflow Complete!\n\n';
+    completionMessage += '📊 Data Updated: ' + updateResult.summary.totalBalancesUpdated + ' banks\n';
+    completionMessage += '💰 Payouts Reconciled: ' + (reconciliationResult.reconciled || 0) + '\n';
+    completionMessage += '🔄 Consolidations: ' + (reconciliationResult.consolidations || 0) + '\n';
+    completionMessage += '📤 Slack Notification: ' + (slackResult.success ? 'Sent' : 'Failed') + '\n';
+    completionMessage += '📊 Funded Accounts Info: ' + (fundedSlackResult ? 'Sent' : 'Failed') + '\n\n';
+    completionMessage += 'Funded Accounts Used Today:\n' + fundedAccounts;
+    
+    if (updateResult.errors && updateResult.errors.length > 0) {
+      completionMessage += '\n\n⚠️ Update Errors:\n';
+      updateResult.errors.forEach(function(error) {
+        completionMessage += '• ' + error + '\n';
+      });
+    }
+    
+    if (reconciliationResult.errors && reconciliationResult.errors.length > 0) {
+      completionMessage += '\n\n⚠️ Reconciliation Errors:\n';
+      reconciliationResult.errors.forEach(function(error) {
+        completionMessage += '• ' + error + '\n';
+      });
+    }
+    
+    ui.alert('Fon Complete', completionMessage, ui.ButtonSet.OK);
+    
+  } catch (e) {
+    Logger.log('[ERROR] Fon workflow failed: %s', e.message);
+    SpreadsheetApp.getUi().alert('❌ Fon Error', 'Fon workflow failed:\n\n' + e.message, SpreadsheetApp.getUi().ButtonSet.OK);
+  }
+}
+
+function getSlackWebhookUrl(channel) {
+  /*
+   * Get the Slack webhook URL for the specified channel
+   */
+  try {
+    var properties = PropertiesService.getScriptProperties();
+    var webhookUrl = properties.getProperty('SLACK_WEBHOOK_URL_' + channel.toUpperCase());
+    return webhookUrl;
+  } catch (e) {
+    Logger.log('[ERROR] Failed to get Slack webhook URL for channel %s: %s', channel, e.message);
+    return null;
   }
 }
 
