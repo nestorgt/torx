@@ -396,3 +396,85 @@ function saveProcessedPayoutTransactions_(transactionSet) {
   }
 }
 
+function getPendingTransfers_() {
+  /*
+   * Get all pending transfers from PropertiesService
+   * Returns an array of transfer objects
+   */
+  try {
+    var properties = PropertiesService.getScriptProperties();
+    var data = properties.getProperty('pending_transfers');
+    if (!data) {
+      return [];
+    }
+    return JSON.parse(data);
+  } catch (e) {
+    Logger.log('[ERROR] Failed to load pending transfers: %s', e.message);
+    return [];
+  }
+}
+
+function addPendingTransfer_(accountId, amount, currency, transactionId, bankName) {
+  /*
+   * Add a pending transfer to track
+   * @param {string} accountId - Account identifier
+   * @param {number} amount - Transfer amount
+   * @param {string} currency - Currency code (USD, EUR, etc)
+   * @param {string} transactionId - Unique transaction ID
+   * @param {string} bankName - Bank name (Mercury, Revolut, etc)
+   */
+  try {
+    var transfers = getPendingTransfers_();
+
+    var transfer = {
+      accountId: accountId,
+      amount: amount,
+      currency: currency,
+      transactionId: transactionId,
+      bankName: bankName,
+      timestamp: new Date().toISOString()
+    };
+
+    transfers.push(transfer);
+
+    var properties = PropertiesService.getScriptProperties();
+    properties.setProperty('pending_transfers', JSON.stringify(transfers));
+
+    Logger.log('[PENDING_TRANSFER] Added: %s %s %s from %s (ID: %s)', amount, currency, accountId, bankName, transactionId);
+
+    return transfer;
+  } catch (e) {
+    Logger.log('[ERROR] Failed to add pending transfer: %s', e.message);
+    return null;
+  }
+}
+
+function clearPendingTransfer_(transactionId) {
+  /*
+   * Remove a pending transfer by transaction ID
+   */
+  try {
+    var transfers = getPendingTransfers_();
+    var filtered = transfers.filter(function(t) {
+      return t.transactionId !== transactionId;
+    });
+
+    var properties = PropertiesService.getScriptProperties();
+    properties.setProperty('pending_transfers', JSON.stringify(filtered));
+
+    Logger.log('[PENDING_TRANSFER] Cleared: %s (remaining: %s)', transactionId, filtered.length);
+
+    return true;
+  } catch (e) {
+    Logger.log('[ERROR] Failed to clear pending transfer: %s', e.message);
+    return false;
+  }
+}
+
+function clearCompletedTransfer_(transactionId) {
+  /*
+   * Alias for clearPendingTransfer_ for backward compatibility
+   */
+  return clearPendingTransfer_(transactionId);
+}
+
