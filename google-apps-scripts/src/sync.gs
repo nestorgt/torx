@@ -112,6 +112,17 @@ function syncBanksData(options) {
         result.steps.consolidation = consolidationResult;
         result.summary.totalFundsConsolidated = consolidationResult.moved;
         Logger.log('[STEP_3] ✅ Fund consolidation completed: $%s moved', consolidationResult.moved);
+
+        // STEP 3.5: Refresh balances after consolidation (if funds were moved)
+        if (consolidationResult.moved > 0 && !options.dryRun) {
+          Logger.log('[STEP_3.5] Refreshing balances after consolidation...');
+          try {
+            var refreshResult = updateBankBalances_(sh, options.dryRun);
+            Logger.log('[STEP_3.5] ✅ Balances refreshed: %s banks updated', refreshResult.updated);
+          } catch (refreshErr) {
+            Logger.log('[WARNING] Failed to refresh balances after consolidation: %s', refreshErr.message);
+          }
+        }
     } catch (e) {
         Logger.log('[ERROR] Step 3 failed: %s', e.message);
         result.steps.consolidation.status = 'error';
@@ -121,7 +132,7 @@ function syncBanksData(options) {
       Logger.log('[STEP_3] ⏭️ Skipping fund consolidation');
       result.steps.consolidation.status = 'skipped';
     }
-    
+
     // STEP 4: Calculate Monthly Expenses
     if (!options.skipExpenses) {
       Logger.log('[STEP_4] Calculating monthly expenses...');
