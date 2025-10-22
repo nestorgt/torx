@@ -351,8 +351,53 @@ function reconcileTransferWithSpreadsheet(receivedAmount, bankName, accountName)
       }
     } else {
       Logger.log('[TRANSFER_RECONCILE] No suitable match found for $' + receivedAmount + ' (best score: ' + bestMatch.score.toFixed(3) + ')');
-      return { 
-        success: false, 
+
+      // Try to find combinations of pending payouts that might match this amount
+      Logger.log('[TRANSFER_RECONCILE] 💡 Checking for possible combinations of multiple payouts...');
+      var pendingPayouts = [];
+      for (var i = 0; i < payoutData.length; i++) {
+        var row = payoutData[i];
+        var userName = String(row[0] || '').trim();
+        var platform = String(row[1] || '').trim();
+        var baseAmount = Number(row[6] || 0);
+        var received = row[7];
+
+        if (!userName || received === true || baseAmount <= 0) continue;
+
+        var expectedCalc = calculateExpectedPayoutAmount_(platform, baseAmount);
+        pendingPayouts.push({
+          row: i + 22,
+          user: userName,
+          platform: platform,
+          base: baseAmount,
+          expected: expectedCalc.expected,
+          min: expectedCalc.min,
+          max: expectedCalc.max
+        });
+      }
+
+      // Check for 2-payout combinations
+      for (var a = 0; a < pendingPayouts.length; a++) {
+        for (var b = a + 1; b < pendingPayouts.length; b++) {
+          var combo = pendingPayouts[a].expected + pendingPayouts[b].expected;
+          var tolerance = receivedAmount * 0.05; // 5% tolerance
+
+          if (Math.abs(combo - receivedAmount) < tolerance) {
+            Logger.log('[TRANSFER_RECONCILE] 💡 POSSIBLE MATCH - Two payouts:');
+            Logger.log('[TRANSFER_RECONCILE]   Row %s: %s - %s $%s (expected: $%s)',
+              pendingPayouts[a].row, pendingPayouts[a].user, pendingPayouts[a].platform,
+              pendingPayouts[a].base, pendingPayouts[a].expected);
+            Logger.log('[TRANSFER_RECONCILE]   Row %s: %s - %s $%s (expected: $%s)',
+              pendingPayouts[b].row, pendingPayouts[b].user, pendingPayouts[b].platform,
+              pendingPayouts[b].base, pendingPayouts[b].expected);
+            Logger.log('[TRANSFER_RECONCILE]   Combined expected: $%s, Received: $%s (diff: $%s)',
+              combo, receivedAmount, Math.abs(combo - receivedAmount));
+          }
+        }
+      }
+
+      return {
+        success: false,
         error: 'No suitable match found for $' + receivedAmount + ' from ' + bankName + ' (' + accountName + ')',
         bestScore: bestMatch.score
       };
