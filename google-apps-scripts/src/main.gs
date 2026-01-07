@@ -16,6 +16,7 @@ function onOpen() {
     // Unified Sync (Primary Functions)
     .addItem('🚀 Sync Banks Data (Full)', 'menuSyncBanksDataFull')
     .addItem('🔍 Sync Banks Data (Dry Run)', 'menuSyncBanksDataDryRun')
+    .addItem('🔄 Sync Nexo Transactions', 'menuSyncNexoTransactions')
     .addSeparator()
     // Individual Component Tests
     .addItem('🧪 Test Balances Only', 'menuTestSyncBalancesOnly')
@@ -111,15 +112,26 @@ function menuSendSummaryToDaily() {
  */
 function menuUpdateData() {
   try {
-    syncBanksData({
+    Logger.log('[MENU] Starting Update All Data...');
+    var result = syncBanksData({
       dryRun: false,
-      includeBalances: true,
-      includePayouts: true,
-      includeExpenses: true,
-      includeTransfers: true,
-      includeConsolidation: false
+      skipExpenses: false,
+      skipConsolidation: false,  // Run consolidation to move funds to Main accounts
+      skipPayoutReconciliation: false
     });
-    SpreadsheetApp.getUi().alert('Success', 'All data updated successfully!', SpreadsheetApp.getUi().ButtonSet.OK);
+
+    if (result.status === 'success') {
+      var summary = '✅ All data updated successfully!\n\n' +
+        '• Balances: ' + result.summary.totalBalancesUpdated + ' banks updated\n' +
+        '• Payouts: ' + result.summary.totalPayoutsDetected + ' detected, ' + result.summary.totalPayoutsReconciled + ' reconciled\n' +
+        '• Consolidation: $' + (result.summary.totalFundsConsolidated || 0) + ' moved to Main\n' +
+        '• Expenses: ' + (result.summary.totalExpensesCalculated > 0 ? 'Calculated' : 'Not calculated') + '\n' +
+        '• Duration: ' + (result.duration / 1000).toFixed(1) + 's';
+
+      SpreadsheetApp.getUi().alert('Success', summary, SpreadsheetApp.getUi().ButtonSet.OK);
+    } else {
+      throw new Error(result.error || 'Sync failed');
+    }
   } catch (e) {
     Logger.log('[ERROR] Failed to update data: %s', e.message);
     SpreadsheetApp.getUi().alert('Error', 'Failed to update data: ' + e.message, SpreadsheetApp.getUi().ButtonSet.OK);

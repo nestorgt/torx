@@ -249,47 +249,49 @@ function consolidateMercuryUsdFunds_(dryRun) {
     for (var i = 0; i < accounts.length; i++) {
       var account = accounts[i];
       var accountName = account.name || account.displayName || 'Unknown';
+      // Use nickname for user matching (Mercury accounts have user names in nickname field)
+      var userIdentifier = account.nickname || accountName;
       var accountId = account.id || account.account_id || '';
-      
+
       result.processed++;
-      
+
       // Identify and skip Main account (Mercury Checking ••2290)
       var currency = account.currency || 'USD';
       var isMainAccount = (
-        (account.name ? account.name.includes('2290') : false) || 
+        (account.name ? account.name.includes('2290') : false) ||
         (account.nickname ? account.nickname.includes('2290') : false) ||
         account.isMainAccount === true ||
         (account.nickname ? account.nickname.toLowerCase().includes('main') : false)
       );
-      
+
       // Skip non-USD accounts
       if (currency.toUpperCase() !== 'USD') {
         Logger.log('[MERCURY_CONSOLIDATION] Skipping non-USD account: %s (%s)', accountName, currency);
         continue;
       }
-      
+
       if (isMainAccount) {
         Logger.log('[MERCURY_CONSOLIDATION] Skipping Main account: %s', accountName);
         continue;
       }
-      
+
       // Use actual balance from detailed account data
       try {
         var balance = account.balance || 0;
         var availableBalance = account.availableBalance || balance;
         var usdBalance = availableBalance;
-        
-        Logger.log('[MERCURY_CONSOLIDATION] Account %s: $%s USD (available: $%s)', accountName, balance, availableBalance);
-        
+
+        Logger.log('[MERCURY_CONSOLIDATION] Account %s (nickname: %s): $%s USD (available: $%s)', accountName, userIdentifier, balance, availableBalance);
+
         if (usdBalance > 0) {
           result.foundTotal += usdBalance;
-          
+
           // DETECT PAYOUT: Non-Main USD account with balance indicates a payout
-          Logger.log('[MERCURY_PAYOUT] Detected payout: $%s USD on %s (non-Main account)', usdBalance, accountName);
-          
-          // Attempt payout reconciliation with Payouts sheet
+          Logger.log('[MERCURY_PAYOUT] Detected payout: $%s USD on %s (nickname: %s, non-Main account)', usdBalance, accountName, userIdentifier);
+
+          // Attempt payout reconciliation with Payouts sheet - use userIdentifier (nickname) for user matching
           try {
-            var reconciliationResult = reconcileTransferWithSpreadsheet(usdBalance, 'Mercury', accountName);
+            var reconciliationResult = reconcileTransferWithSpreadsheet(usdBalance, 'Mercury', userIdentifier);
             if (reconciliationResult.success) {
               Logger.log('[MERCURY_PAYOUT] ✅ Payout reconciled: %s', reconciliationResult.message);
               result.payoutsReconciled = (result.payoutsReconciled || 0) + 1;

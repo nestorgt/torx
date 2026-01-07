@@ -8,10 +8,13 @@ echo "=== Proxy Server Status Check ==="
 echo "Time: $(date)"
 echo
 
-# Check if server process is running
+# Check if server process is running (PM2 or direct)
 if pgrep -f "node server.js" > /dev/null; then
-    echo "✅ Server process is running"
+    echo "✅ Server process is running (direct)"
     echo "PID: $(pgrep -f 'node server.js')"
+elif pm2 list | grep -q "proxy-banks.*online" 2>/dev/null; then
+    echo "✅ Server process is running (PM2)"
+    pm2 list | grep proxy-banks
 else
     echo "❌ Server process is NOT running"
 fi

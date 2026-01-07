@@ -16,13 +16,14 @@ log_message() {
 if ! curl -s -m 10 "http://localhost:8081/healthz" > /dev/null 2>&1; then
     log_message "Server not responding, restarting..."
     
-    # Kill existing server processes
-    pkill -f "node server.js" 2>/dev/null
-    sleep 3
-    
-    # Start server
-    cd "$SERVER_DIR"
-    nohup "$NODE_PATH" server.js > server.log 2>&1 &
+    # Try PM2 restart first
+    if pm2 list | grep -q "proxy-banks.*online" 2>/dev/null; then
+        log_message "Restarting PM2 process..."
+        pm2 restart proxy-banks
+    else
+        log_message "Starting PM2 process..."
+        pm2 start ecosystem.config.cjs
+    fi
     
     # Wait and check if it started
     sleep 5

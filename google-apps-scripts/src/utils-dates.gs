@@ -107,16 +107,35 @@ function findExistingMonthRow_(sh, monthStr) {
     Logger.log('[MONTH_MGMT] Looking for existing row for month: %s', monthStr);
     var lastRow = sh.getLastRow();
     Logger.log('[MONTH_MGMT] Last row in sheet: %s', lastRow);
-    
+    Logger.log('[MONTH_MGMT] Searching from row %s to row %s in column A', USERS_FIRST_MONTH_ROW, lastRow);
+
     for (var row = USERS_FIRST_MONTH_ROW; row <= lastRow; row++) {
       var cellValue = sh.getRange(row, 1).getValue();
-      if (cellValue && String(cellValue).trim() === monthStr) {
-        Logger.log('[MONTH_MGMT] Found existing row %s for month %s', row, monthStr);
+
+      if (!cellValue) continue;
+
+      var cellStr;
+
+      // Check if it's a Date object
+      if (cellValue instanceof Date) {
+        // Convert Date to MM-YYYY format
+        var month = padStart(String(cellValue.getMonth() + 1), 2, '0');
+        var year = cellValue.getFullYear();
+        cellStr = month + '-' + year;
+        Logger.log('[MONTH_MGMT] Row %s, Column A: Date object -> "%s" (comparing to "%s")', row, cellStr, monthStr);
+      } else {
+        // It's a string
+        cellStr = String(cellValue).trim();
+        Logger.log('[MONTH_MGMT] Row %s, Column A: "%s" (comparing to "%s")', row, cellStr, monthStr);
+      }
+
+      if (cellStr === monthStr) {
+        Logger.log('[MONTH_MGMT] ✅ Found existing row %s for month %s', row, monthStr);
         return row;
       }
     }
-    
-    Logger.log('[MONTH_MGMT] No existing row found for month %s', monthStr);
+
+    Logger.log('[MONTH_MGMT] ❌ No existing row found for month %s', monthStr);
     return null;
   } catch (e) {
     Logger.log('[ERROR] Failed to find existing month row: %s', e.message);

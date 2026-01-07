@@ -16,12 +16,13 @@ var TOPUP_AMOUNT_USD = 3000;          // Amount to transfer for topups
 var TS_CELL = 'A1';                   // Timestamp cell for payouts
 var CURRENT_TIMEZONE = 'Europe/Madrid';
 var USERS_FIRST_MONTH_ROW = 30;       // First month row for user payments
+var USERS_FIRST_COLUMN = 2;           // First user column (column B)
 
 /* ============== Cell Mapping ============== */
+// Note: Wise and Nexo removed from balance tracking (not counted towards total)
+// Nexo transactions are still tracked for expense calculation (Revolut→Nestor→Nexo)
 var CELLS = {
   Airwallex: { USD: 'B2', EUR: 'B3' },
   Mercury:   { USD: 'C2', EUR: 'C3' },
-  Revolut:   { USD: 'D2', EUR: 'D3' },
-  Wise:      { USD: 'E2', EUR: 'E3' },
-  Nexo:      { USD: 'F2' }             // USD-only
+  Revolut:   { USD: 'D2', EUR: 'D3' }
 };

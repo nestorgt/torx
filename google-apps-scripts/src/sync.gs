@@ -94,6 +94,17 @@ function syncBanksData(options) {
         result.summary.totalPayoutsDetected = payoutResult.detected;
         result.summary.totalPayoutsReconciled = payoutResult.reconciled;
         Logger.log('[STEP_2] ✅ Payouts processed: %s detected, %s reconciled', payoutResult.detected, payoutResult.reconciled);
+
+        // STEP 2.5: Refresh balances after payout reconciliation (if payouts were reconciled)
+        if (payoutResult.reconciled > 0 && !options.dryRun) {
+          Logger.log('[STEP_2.5] Refreshing balances after payout reconciliation...');
+          try {
+            var refreshResult = updateBankBalances_(sh, options.dryRun);
+            Logger.log('[STEP_2.5] ✅ Balances refreshed: %s banks updated', refreshResult.updated);
+          } catch (refreshErr) {
+            Logger.log('[WARNING] Failed to refresh balances after payout reconciliation: %s', refreshErr.message);
+          }
+        }
     } catch (e) {
         Logger.log('[ERROR] Step 2 failed: %s', e.message);
         result.steps.payouts.status = 'error';

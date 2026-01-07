@@ -8,49 +8,40 @@ function adjustBalancesForPendingTransfers_(balances) {
   /*
    * Adjust bank balances to account for pending outbound transfers
    * This ensures consolidation doesn't double-count funds already "in transit"
+   * Note: Wise and Nexo removed - not counted towards total
    */
   try {
     var pendingTransfers = getPendingTransfers_();
-    
+
     if (pendingTransfers.length === 0) {
       Logger.log('[PENDING_ADJUSTMENT] No pending transfers found');
       return balances;
     }
-    
+
     Logger.log('[PENDING_ADJUSTMENT] Found %s pending transfers - adjusting balances', pendingTransfers.length);
-    
+
     // Adjust balances for outgoing transfers (amounts "committed" but not yet arrived)
     for (var i = 0; i < pendingTransfers.length; i++) {
       var transfer = pendingTransfers[i];
       var bankName = transfer.bankName || 'Unknown';
-      
+
       if (bankName.toLowerCase() === 'mercury' && balances.mercury) {
         balances.mercury.USD = Math.max(0, parseFloat(balances.mercury.USD || 0) - parseFloat(transfer.amount || 0));
         Logger.log('[PENDING_ADJUSTMENT] Mercury: Reduced by %s USD -> %s USD', transfer.amount, balances.mercury.USD);
         balances.mercury.pendingReduction = (balances.mercury.pendingReduction || 0) + parseFloat(transfer.amount || 0);
       }
-      
+
       if (bankName.toLowerCase() === 'revolut' && balances.revolut) {
         balances.revolut.USD = Math.max(0, parseFloat(balances.revolut.USD || 0) - parseFloat(transfer.amount || 0));
         Logger.log('[PENDING_ADJUSTMENT] Revolut: Reduced by %s USD -> %s USD', transfer.amount, balances.revolut.USD);
         balances.revolut.pendingReduction = (balances.revolut.pendingReduction || 0) + parseFloat(transfer.amount || 0);
       }
-      
-      if (bankName.toLowerCase() === 'wise' && balances.wise) {
-        balances.wise.USD = Math.max(0, parseFloat(balances.wise.USD || 0) - parseFloat(transfer.amount || 0));
-        Logger.log('[PENDING_ADJUSTMENT] Wise: Reduced by %s USD -> %s USD', transfer.amount, balances.wise.USD);
-        balances.wise.pendingReduction = (balances.wise.pendingReduction || 0) + parseFloat(transfer.amount || 0);
-      }
-      
-      if (bankName.toLowerCase() === 'nexo' && balances.nexo) {
-        balances.nexo.USD = Math.max(0, parseFloat(balances.nexo.USD || 0) - parseFloat(transfer.amount || 0));
-        Logger.log('[PENDING_ADJUSTMENT] Nexo: Reduced by %s USD -> %s USD', transfer.amount, balances.nexo.USD);
-        balances.nexo.pendingReduction = (balances.nexo.pendingReduction || 0) + parseFloat(transfer.amount || 0);
-      }
+
+      // Note: Wise and Nexo pending transfers no longer tracked - not counted towards total
     }
-    
+
     return balances;
-    
+
   } catch (e) {
     Logger.log('[ERROR] Failed to adjust balances for pending transfers: %s', e.message);
     return balances;
@@ -61,9 +52,10 @@ function fetchAllBankUsdBalances_() {
   /*
    * STEP 1: Fetch USD balances from all banks
    * Returns detailed balance information for each bank's Main account
+   * Note: Wise and Nexo removed from balance tracking (not counted towards total)
    */
   var balances = {};
-  
+
   try {
     // Mercury Main Account Balance
     Logger.log('[BALANCE_FETCH] Fetching Mercury Main account balance...');
@@ -73,7 +65,7 @@ function fetchAllBankUsdBalances_() {
     Logger.log('[ERROR] Failed to fetch Mercury balance: %s', e.message);
     balances.mercury = { USD: 0, EUR: 0, bankName: 'Mercury', error: e.message };
   }
-  
+
   try {
     // Revolut Balance
     Logger.log('[BALANCE_FETCH] Fetching Revolut balance...');
@@ -84,32 +76,13 @@ function fetchAllBankUsdBalances_() {
     Logger.log('[ERROR] Failed to fetch Revolut balance: %s', e.message);
     balances.revolut = { USD: 0, EUR: 0, bankName: 'Revolut', error: e.message };
   }
-  
-  try {
-    // Wise Balance
-    Logger.log('[BALANCE_FETCH] Fetching Wise balance...');
-    balances.wise = fetchWiseSummary_();
-    balances.wise.bankName = 'Wise';
-    Logger.log('[BALANCE_FETCH] Wise: $%s USD', balances.wise.USD);
-  } catch (e) {
-    Logger.log('[ERROR] Failed to fetch Wise balance: %s', e.message);
-    balances.wise = { USD: 0, EUR: 0, bankName: 'Wise', error: e.message };
-  }
-  
-  try {
-    // Nexo Balance
-    Logger.log('[BALANCE_FETCH] Fetching Nexo balance...');
-    balances.nexo = fetchNexoSummary_();
-    balances.nexo.bankName = 'Nexo';
-    Logger.log('[BALANCE_FETCH] Nexo: $%s USD', balances.nexo.USD);
-  } catch (e) {
-    Logger.log('[ERROR] Failed to fetch Nexo balance: %s', e.message);
-    balances.nexo = { USD: 0, EUR: 0, bankName: 'Nexo', error: e.message };
-  }
-  
+
+  // Note: Wise and Nexo balances no longer fetched - not counted towards total
+  // Nexo transactions are still tracked for expense calculation (Revolut→Nestor→Nexo)
+
   // Adjust balances for pending transfers from previous consolidation systems
   balances = adjustBalancesForPendingTransfers_(balances);
-  
+
   return balances;
 }
 
@@ -377,24 +350,26 @@ function dryRunCheckAllBankMinimumBalances() {
 function updateBankBalance_(sh, bankName, summary, note) {
   try {
     Logger.log('[BALANCE] Updating %s balance: %s', bankName, JSON.stringify(summary));
-    
+
     var bankCells = CELLS[bankName];
     if (!bankCells) {
       Logger.log('[ERROR] No cell mapping found for bank: %s', bankName);
       return;
     }
-    
+
     if (summary.USD !== undefined) {
-      setCellKeepFmt_(sh, bankCells.USD, summary.USD, note || bankName + ' USD balance updated');
+      // Pass empty string to avoid adding timestamp notes
+      setCellKeepFmt_(sh, bankCells.USD, summary.USD, '');
     }
-    
+
     if (summary.EUR !== undefined && bankCells.EUR) {
-      setCellKeepFmt_(sh, bankCells.EUR, summary.EUR, note || bankName + ' EUR balance updated');
+      // Pass empty string to avoid adding timestamp notes
+      setCellKeepFmt_(sh, bankCells.EUR, summary.EUR, '');
     }
-    
+
     // Update timestamp
     sh.getRange(TS_CELL).setValue(nowStampCell_());
-    
+
     Logger.log('[BALANCE] ✅ %s balance updated successfully', bankName);
   } catch (e) {
     Logger.log('[ERROR] Failed to update %s balance: %s', bankName, e.message);
@@ -487,35 +462,10 @@ function updateBankBalances_(sh, dryRun) {
         setNoteOnly_(sh, revolutCells.USD, 'Error updating Revolut balance: ' + e.message);
       }
     }
-    
-    // Update Wise
-    try {
-      var wiseSummary = fetchWiseSummary_();
-      updateBankBalance_(sh, 'Wise', wiseSummary, wiseSummary && wiseSummary.error ? wiseSummary.error : null);
-      result.updated++;
-    } catch (e) {
-      Logger.log('[ERROR] Wise balance update failed: %s', e.message);
-      result.errors.push('Wise: ' + e.message);
-      var wiseCells = CELLS['Wise'];
-      if (wiseCells && wiseCells.USD) {
-        setNoteOnly_(sh, wiseCells.USD, 'Error updating Wise balance: ' + e.message);
-      }
-    }
-    
-    // Update Nexo (USD only)
-    try {
-      var nexoSummary = fetchNexoSummary_();
-      updateBankBalance_(sh, 'Nexo', { USD: nexoSummary.USD || 0, error: nexoSummary.error }, nexoSummary && nexoSummary.error ? nexoSummary.error : null);
-      result.updated++;
-    } catch (e) {
-      Logger.log('[ERROR] Nexo balance update failed: %s', e.message);
-      result.errors.push('Nexo: ' + e.message);
-      var nexoCells = CELLS['Nexo'];
-      if (nexoCells && nexoCells.USD) {
-        setNoteOnly_(sh, nexoCells.USD, 'Error updating Nexo balance: ' + e.message);
-      }
-    }
-    
+
+    // Note: Wise and Nexo balance updates removed - not counted towards total
+    // Nexo transactions are still tracked for expense calculation (Revolut→Nestor→Nexo)
+
     Logger.log('[BALANCES] Updated %s bank balances', result.updated);
     if (!dryRun) {
       try {

@@ -498,6 +498,7 @@ app.post("/revolut/transfer", async (req, res) => {
     const CCY = String(currency).toUpperCase();
     const accounts = await fetchRevolutAccounts();
 
+    // Exchange is done in bulk before payments, so just use the requested source
     const source = findAccountByNameAndCcy(accounts, fromName, CCY);
     if (!source) return res.status(400).json({ error: "source_not_found", detail: `No existe cuenta origen "${fromName}" ${CCY}` });
 
@@ -512,7 +513,7 @@ app.post("/revolut/transfer", async (req, res) => {
       source_account_id: source.id,
       target_account_id: target.id,
       amount: amt,
-      currency: CCY,
+      currency: CCY,  // Use target currency (EUR)
       reference: reference || `Payout ${toName}`
     };
 
@@ -641,9 +642,15 @@ app.post("/revolut/exchange", async (req, res) => {
 
     const payload = {
       request_id: reqId,
-      from: { account_id: fromAcc.id, currency: upFrom },
-      to:   { account_id: toAcc.id,   currency: upTo   },
-      amount: amt,           // cantidad en moneda de origen
+      from: {
+        account_id: fromAcc.id,
+        currency: upFrom,
+        amount: amt           // cantidad en moneda de origen
+      },
+      to: {
+        account_id: toAcc.id,
+        currency: upTo
+      },
       reference: reference || `FX ${upFrom}->${upTo}`
     };
 
@@ -1978,7 +1985,10 @@ async function airwallexLogin() {
       headers: { 
         "content-type": "application/json",
         "x-client-id": AW_CID,
-        "x-api-key": AW_SEC
+        "x-api-key": AW_SEC,
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+        "Expires": "0"
       }, 
       timeout: 15000, 
       validateStatus: () => true 
@@ -1996,7 +2006,13 @@ async function airwallexLogin() {
 
 async function airwallexBalancesCurrent(token) {
   const { data, status } = await axios.get(`${AW_BASE}/api/v1/balances/current`, {
-    headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+    headers: { 
+      Authorization: `Bearer ${token}`, 
+      Accept: "application/json",
+      "Cache-Control": "no-cache, no-store, must-revalidate",
+      "Pragma": "no-cache",
+      "Expires": "0"
+    },
     timeout: 15000,
     validateStatus: () => true
   });
@@ -2059,16 +2075,22 @@ app.get("/airwallex/transactions", async (req, res) => {
       console.log(`[AIRWALLEX] Fetching page ${page} of financial transactions...`);
       
       const { data: txData, status: txStatus } = await axios.get(`${AW_BASE}/api/v1/financial_transactions`, {
-      headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+        headers: { 
+          Authorization: `Bearer ${token}`, 
+          Accept: "application/json",
+          "Cache-Control": "no-cache, no-store, must-revalidate",
+          "Pragma": "no-cache",
+          "Expires": "0"
+        },
         params: {
           page: page,
           page_size: pageSize,
           from_created_at: startDate.toISOString().split('T')[0], // YYYY-MM-DD format
           to_created_at: endDate.toISOString().split('T')[0]     // YYYY-MM-DD format
         },
-      timeout: 15000,
-      validateStatus: () => true
-    });
+        timeout: 15000,
+        validateStatus: () => true
+      });
     
       console.log(`[AIRWALLEX] Page ${page} status: ${txStatus}`);
       
@@ -2579,14 +2601,102 @@ async function saveCookies(page) {
   } catch {}
 }
 async function dismissNexoPopups(page) {
-  const maybe = await page.$('[data-testid="loyalty.minimumBalanceFeaturesModal.locked.modal"], [data-testid="web-ui.component.modal-wrap"]');
-  if (!maybe) return;
   const safeClick = async (selector) => {
     const el = await page.$(selector);
     if (!el) return false;
     await el.evaluate(b => b.click());
     return true;
   };
+
+  // 0. Dismiss Nexo card/cashback promotional banner (bottom-left popup)
+  if (await safeClick('[data-testid="card.add.banner.close"]')) {
+    console.log('[NEXO] Dismissed card promotional banner');
+    await sleep(500);
+  }
+
+  // 1. Try to dismiss bottom-left popups (toast notifications, chat widgets, intercom, etc.)
+  const dismissedBottomLeft = await page.evaluate(() => {
+    // Common bottom-left popup patterns
+    const selectors = [
+      // Intercom/chat widgets
+      '[class*="intercom"]',
+      '[id*="intercom"]',
+      '[class*="chat-widget"]',
+      '[class*="chat-launcher"]',
+      // Toast notifications
+      '[class*="toast"]',
+      '[class*="notification"]',
+      '[class*="snackbar"]',
+      // Bottom-left positioned elements
+      '[style*="bottom"][style*="left"]',
+      // Cookie consent
+      '[class*="cookie"]',
+      '[id*="cookie"]',
+      // Help widgets
+      '[class*="help-widget"]',
+      '[class*="support-widget"]',
+      // Zendesk
+      '[id*="zendesk"]',
+      '[class*="zendesk"]',
+      // Drift
+      '[id*="drift"]',
+      '[class*="drift"]'
+    ];
+
+    let dismissed = false;
+
+    // Try to find and click close buttons on these elements
+    for (const sel of selectors) {
+      const elements = document.querySelectorAll(sel);
+      for (const el of elements) {
+        // Look for close button within the element
+        const closeBtn = el.querySelector('button[aria-label*="close" i], button[class*="close"], [class*="dismiss"], [aria-label*="dismiss" i], .close, [class*="Close"]');
+        if (closeBtn) {
+          closeBtn.click();
+          dismissed = true;
+        }
+        // Or try to hide the element directly if it's blocking
+        const rect = el.getBoundingClientRect();
+        if (rect.bottom > window.innerHeight - 200 && rect.left < 200) {
+          // Element is in bottom-left corner - try to minimize or hide
+          const minimizeBtn = el.querySelector('[class*="minimize"], [aria-label*="minimize" i]');
+          if (minimizeBtn) {
+            minimizeBtn.click();
+            dismissed = true;
+          }
+        }
+      }
+    }
+
+    // Also try generic close buttons in bottom-left area
+    const allButtons = document.querySelectorAll('button, [role="button"]');
+    for (const btn of allButtons) {
+      const rect = btn.getBoundingClientRect();
+      // Check if button is in bottom-left quadrant
+      if (rect.bottom > window.innerHeight - 200 && rect.left < 300) {
+        const text = (btn.textContent || '').toLowerCase();
+        const ariaLabel = (btn.getAttribute('aria-label') || '').toLowerCase();
+        if (text.includes('close') || text.includes('dismiss') || text.includes('got it') ||
+            text.includes('ok') || text.includes('×') || text === 'x' ||
+            ariaLabel.includes('close') || ariaLabel.includes('dismiss')) {
+          btn.click();
+          dismissed = true;
+        }
+      }
+    }
+
+    return dismissed;
+  });
+
+  if (dismissedBottomLeft) {
+    console.log('[NEXO] Dismissed bottom-left popup');
+    await sleep(500);
+  }
+
+  // 2. Handle main modal popups
+  const maybe = await page.$('[data-testid="loyalty.minimumBalanceFeaturesModal.locked.modal"], [data-testid="web-ui.component.modal-wrap"]');
+  if (!maybe) return;
+
   if (await safeClick('button[data-testid="loyalty.minimumBalanceModalCtas-secondary.locked"]')) {
     await page.waitForSelector('[data-testid="loyalty.minimumBalanceFeaturesModal.locked.modal"]', { hidden: true, timeout: 5000 }).catch(()=>{});
     return;
@@ -2615,6 +2725,24 @@ async function loginIfNeeded(page) {
   page.setDefaultTimeout(60000);
   await page.setUserAgent("Mozilla/5.0 (Macintosh; Intel Mac OS X) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari");
 
+  // Override WebAuthn API completely to prevent passkey authentication attempts
+  await page.evaluateOnNewDocument(() => {
+    // Completely disable WebAuthn / Passkey API
+    Object.defineProperty(navigator, 'credentials', {
+      get: () => ({
+        get: async () => { throw new DOMException('Passkey disabled', 'NotAllowedError'); },
+        create: async () => { throw new DOMException('Passkey disabled', 'NotAllowedError'); },
+        store: async () => { throw new DOMException('Passkey disabled', 'NotAllowedError'); },
+        preventSilentAccess: async () => {}
+      }),
+      configurable: false
+    });
+    // Also disable PublicKeyCredential to completely remove WebAuthn support
+    Object.defineProperty(window, 'PublicKeyCredential', { value: undefined, configurable: false });
+    console.log('[NEXO-INJECT] WebAuthn completely disabled');
+  });
+  console.log('[NEXO] WebAuthn override injected');
+
   await page.goto(`${NEXO_BASE_URL}/login`, { waitUntil: "domcontentloaded", timeout: 120000 });
 
   await loadCookies(page);
@@ -2628,27 +2756,149 @@ async function loginIfNeeded(page) {
     throw new Error("Nexo: challenge/captcha detectado (ver nexo-debug/*).");
   }
 
+  // Wait for page to fully load and stabilize - wait longer for passkey attempt to complete
   await page.waitForSelector(SEL.email, { timeout: 45000 });
-  await page.type(SEL.email, NEXO_EMAIL, { delay: 20 });
-  await page.type(SEL.pass,  NEXO_PASSWORD, { delay: 20 });
+  console.log('[NEXO] Email field found, waiting for passkey attempt to complete...');
+  await sleep(8000); // Wait 8 seconds for any async passkey attempt to trigger and fail
+
+  // Check for any WebAuthn error message and try multiple times to get a clean page
+  for (let attempt = 0; attempt < 5; attempt++) {
+    // Check both innerText and innerHTML for error messages
+    const hasError = await page.evaluate(() => {
+      const html = document.body.innerHTML.toLowerCase();
+      const text = document.body.innerText.toLowerCase();
+      const hasCancel = html.includes('cancelled') || html.includes('canceled') ||
+                        text.includes('cancelled') || text.includes('canceled');
+      const hasOperation = html.includes('operation') || text.includes('operation');
+      return hasCancel && hasOperation;
+    });
+
+    if (hasError) {
+      console.log(`[NEXO] Detected cancelled error in page (attempt ${attempt + 1}), clearing and retrying...`);
+      // Clear browser state and navigate fresh
+      await page.evaluate(() => {
+        localStorage.clear();
+        sessionStorage.clear();
+      });
+      await page.goto('about:blank', { waitUntil: 'domcontentloaded' });
+      await sleep(2000);
+      await page.goto(`${NEXO_BASE_URL}/login`, { waitUntil: 'networkidle2', timeout: 120000 });
+      await page.waitForSelector(SEL.email, { timeout: 45000 });
+      await sleep(8000); // Wait again for any passkey attempt
+    } else {
+      console.log('[NEXO] No error detected, proceeding with login');
+      break;
+    }
+  }
+
+  // Hide any error messages that might interfere
+  await page.evaluate(() => {
+    const errorEls = document.querySelectorAll('[class*="error"], [class*="Error"], [role="alert"]');
+    errorEls.forEach(el => { el.style.display = 'none'; });
+  });
+
+  // Clear any existing values in the fields first
+  await page.evaluate(sel => {
+    const el = document.querySelector(sel);
+    if (el) { el.value = ''; el.focus(); }
+  }, SEL.email);
+  await sleep(300);
+
+  // Type email slowly
+  console.log('[NEXO] Typing email...');
+  await page.type(SEL.email, NEXO_EMAIL, { delay: 50 });
+  await sleep(800); // Wait for field validation
+
+  // Clear and focus password field
+  await page.evaluate(sel => {
+    const el = document.querySelector(sel);
+    if (el) { el.value = ''; el.focus(); }
+  }, SEL.pass);
+  await sleep(300);
+
+  // Type password slowly
+  console.log('[NEXO] Typing password...');
+  await page.type(SEL.pass, NEXO_PASSWORD, { delay: 50 });
+  await sleep(800); // Wait for field validation
+
+  // Click submit
+  console.log('[NEXO] Clicking submit...');
   await page.click(SEL.submit);
+  console.log('[NEXO] Credentials submitted, waiting for server response...');
+  await sleep(15000); // Wait 15 seconds for server to respond and any passkey errors to appear
+
+  // Check if login failed with error - retry up to 3 times
+  for (let loginAttempt = 0; loginAttempt < 3; loginAttempt++) {
+    const stillOnLogin = await page.evaluate((emailSel) => !!document.querySelector(emailSel), SEL.email);
+    const errorText = await page.evaluate(() => document.body.innerText.toLowerCase());
+    const hasCancelError = errorText.includes('canceled') || errorText.includes('cancelled');
+    const hasRateLimitError = errorText.includes('too many');
+    const hasError = hasCancelError || hasRateLimitError;
+    console.log(`[NEXO] Post-submit check: stillOnLogin=${stillOnLogin}, hasError=${hasError}, cancel=${hasCancelError}, rateLimit=${hasRateLimitError}`);
+
+    if (stillOnLogin && hasError) {
+      if (hasRateLimitError) {
+        console.log(`[NEXO] Rate limited, waiting 60 seconds before retry...`);
+        await sleep(60000);
+      }
+      console.log(`[NEXO] Login failed with error (attempt ${loginAttempt + 1}), refreshing and retrying...`);
+      await page.goto('about:blank', { waitUntil: 'domcontentloaded' });
+      await sleep(2000);
+      await page.goto(`${NEXO_BASE_URL}/login`, { waitUntil: 'networkidle2', timeout: 120000 });
+      await page.waitForSelector(SEL.email, { timeout: 45000 });
+      await sleep(10000); // Wait longer for passkey attempt
+
+      // Re-enter credentials
+      await page.evaluate(sel => { const el = document.querySelector(sel); if (el) { el.value = ''; el.focus(); } }, SEL.email);
+      await page.type(SEL.email, NEXO_EMAIL, { delay: 50 });
+      await sleep(500);
+      await page.evaluate(sel => { const el = document.querySelector(sel); if (el) { el.value = ''; el.focus(); } }, SEL.pass);
+      await page.type(SEL.pass, NEXO_PASSWORD, { delay: 50 });
+      await sleep(500);
+      await page.click(SEL.submit);
+      console.log('[NEXO] Credentials re-submitted...');
+      await sleep(5000);
+    } else {
+      break;
+    }
+  }
 
   try {
-    await page.waitForSelector(SEL.totp, { timeout: 5000 });
+    console.log('[NEXO] Waiting for TOTP field...');
+    await page.waitForSelector(SEL.totp, { timeout: 15000 }); // Increased from 5s to 15s
+    console.log('[NEXO] TOTP field found');
+    await sleep(2000); // Wait for TOTP popup to fully render
     if (!NEXO_TOTP_SECRET) throw new Error("Falta NEXO_TOTP_SECRET");
     let ok = false;
     for (let i = 0; i < 3 && !ok; i++) {
       const code = authenticator.generate(NEXO_TOTP_SECRET);
-      await page.evaluate(sel => { const el = document.querySelector(sel); if (el) el.value = ""; }, SEL.totp);
-      await page.type(SEL.totp, code, { delay: 20 });
-      await page.click(SEL.submit);
+      console.log(`[NEXO] Entering TOTP code (attempt ${i + 1})...`);
+      await page.evaluate(sel => { const el = document.querySelector(sel); if (el) { el.value = ""; el.focus(); } }, SEL.totp);
+      await sleep(500);
+      await page.type(SEL.totp, code, { delay: 100 }); // Slower typing
+      await sleep(2000); // Wait after typing - some sites auto-submit
+
+      // Check if already on dashboard (auto-submit case)
+      const onDash = await page.evaluate(sel => !!document.querySelector(sel), SEL.dashMarker);
+      if (onDash) { ok = true; break; }
+
+      // If still on TOTP, click submit
+      const totpStillVisible = await page.evaluate(sel => !!document.querySelector(sel), SEL.totp);
+      if (totpStillVisible) {
+        console.log('[NEXO] Clicking submit for TOTP...');
+        await page.click(SEL.submit);
+      }
+
       try { await page.waitForSelector(SEL.dashMarker, { timeout: 15000 }); ok = true; }
-      catch { if (i < 2) await sleep(3000); }
+      catch { if (i < 2) await sleep(5000); }
     }
     if (!ok) { await nexoDump(page, "totp-fail"); throw new Error("TOTP falló tras 3 intentos"); }
-  } catch { /* no pidió TOTP */ }
+  } catch (e) {
+    console.log('[NEXO] TOTP section skipped or failed:', e.message);
+  }
 
-  try { await page.waitForSelector(SEL.dashMarker, { timeout: 60000 }); }
+  // Wait up to 3 minutes for dashboard - allows time for manual CAPTCHA completion
+  try { await page.waitForSelector(SEL.dashMarker, { timeout: 180000 }); }
   catch { await nexoDump(page, "dash-timeout"); throw new Error("No se cargó el dashboard (timeout). Revisa nexo-debug/."); }
 
   await dismissNexoPopups(page);
@@ -2726,6 +2976,290 @@ async function scrapeBalances(page) {
   return { totalUsd, assets };
 }
 
+async function scrapeNexoTransactions(page, month, year) {
+  // Calculate date range for the month
+  const startDate = new Date(Date.UTC(Number(year), Number(month) - 1, 1, 0, 0, 0, 0));
+  const endDate = new Date(Date.UTC(Number(year), Number(month), 0, 23, 59, 59, 999));
+
+  console.log(`[NEXO] Fetching transactions for ${month}-${year}`);
+  console.log(`[NEXO] UTC Date range: ${startDate.toISOString()} to ${endDate.toISOString()}`);
+
+  // Navigate to transactions page and wait for network to settle
+  await page.goto(`${NEXO_BASE_URL}/transactions`, { waitUntil: "networkidle2", timeout: 120000 });
+  console.log('[NEXO] Page loaded, waiting for content...');
+  await sleep(5000);
+  await dismissNexoPopups(page);
+
+  // Wait for transaction filters to load (indicates page is ready)
+  await page.waitForSelector('[data-testid="transactions.asset-filter.select"]', { timeout: 30000 }).catch(() => {
+    console.warn('[NEXO] Transaction filters not found');
+  });
+
+  console.log('[NEXO] Filters loaded, waiting for transactions to render...');
+
+  // Try to find and wait for the "Past activity" heading or transaction items
+  const activityLoaded = await page.waitForFunction(() => {
+    const text = document.body.innerText;
+    return text.includes('Past activity') || text.includes('Interest') || text.includes('Exchange') || text.includes('Added FIATx');
+  }, { timeout: 30000 }).catch(() => false);
+
+  if (activityLoaded) {
+    console.log('[NEXO] Transaction activity detected');
+  } else {
+    console.warn('[NEXO] No transaction activity found after 30s');
+  }
+
+  // Additional wait to ensure all transactions are loaded
+  await sleep(5000);
+
+  // Scroll down multiple times to trigger infinite scroll loading
+  console.log('[NEXO] Scrolling to load all transactions...');
+  let previousCount = 0;
+  let scrollAttempts = 0;
+  const maxScrollAttempts = 30; // More attempts to reach older transactions
+
+  while (scrollAttempts < maxScrollAttempts) {
+    // Dismiss any popups that may have appeared during scrolling
+    await dismissNexoPopups(page);
+
+    // Get current transaction count (more reliable than scroll height)
+    const { txCount, scrollableEl } = await page.evaluate(() => {
+      // Try to find the scrollable container for transactions
+      const listBox = document.querySelector('[data-testid="transactions.envelopesList.box"]');
+
+      // Count all transaction items visible
+      const items = document.querySelectorAll('[data-testid^="transactions.envelope."]');
+
+      // Find scrollable parent (may have overflow-y: auto/scroll)
+      let scrollEl = listBox;
+      while (scrollEl && scrollEl.parentElement) {
+        const style = window.getComputedStyle(scrollEl);
+        if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
+          break;
+        }
+        scrollEl = scrollEl.parentElement;
+      }
+
+      return {
+        txCount: items.length,
+        scrollableEl: scrollEl ? scrollEl.tagName : 'none'
+      };
+    });
+
+    if (txCount === previousCount && scrollAttempts > 2) {
+      console.log(`[NEXO] Transaction count stable at ${txCount}, stopping scroll`);
+      break;
+    }
+
+    console.log(`[NEXO] Scroll attempt ${scrollAttempts + 1}: ${txCount} transactions found (container: ${scrollableEl})`);
+    previousCount = txCount;
+
+    // Scroll using multiple methods to ensure we trigger infinite scroll
+    await page.evaluate(() => {
+      // Method 1: Scroll window
+      window.scrollTo(0, document.body.scrollHeight);
+
+      // Method 2: Scroll any element with overflow in the transactions area
+      const scrollContainers = document.querySelectorAll('[data-testid="transactions.envelopesList.box"], [style*="overflow"]');
+      scrollContainers.forEach(el => {
+        el.scrollTop = el.scrollHeight;
+      });
+
+      // Method 3: Scroll main content area
+      const mainContent = document.querySelector('main, [role="main"], #__next > div > div');
+      if (mainContent) {
+        mainContent.scrollTop = mainContent.scrollHeight;
+      }
+
+      // Method 4: Find and scroll any element with scrollable content
+      document.querySelectorAll('*').forEach(el => {
+        const style = window.getComputedStyle(el);
+        if ((style.overflowY === 'auto' || style.overflowY === 'scroll') && el.scrollHeight > el.clientHeight) {
+          el.scrollTop = el.scrollHeight;
+        }
+      });
+    });
+
+    // Wait longer for content to load from server
+    await sleep(3000);
+    scrollAttempts++;
+  }
+
+  console.log(`[NEXO] Completed ${scrollAttempts} scroll attempts`);
+
+  // Scroll back to top
+  await page.evaluate(() => {
+    window.scrollTo(0, 0);
+    document.querySelectorAll('*').forEach(el => {
+      const style = window.getComputedStyle(el);
+      if ((style.overflowY === 'auto' || style.overflowY === 'scroll') && el.scrollHeight > el.clientHeight) {
+        el.scrollTop = 0;
+      }
+    });
+  });
+  await sleep(2000);
+
+  console.log('[NEXO] Taking screenshot...');
+  await nexoDump(page, `transactions-${month}-${year}`);
+
+  // Extract transactions from the page
+  const transactions = await page.evaluate((startMs, endMs) => {
+    const result = [];
+    const debug = [];
+
+    // Nexo uses a card/list layout, not tables
+    // Parse the entire page text to extract transaction information
+    const pageText = document.body.innerText;
+    debug.push(`Page text length: ${pageText.length} characters`);
+
+    // Split by lines and look for transaction patterns
+    const lines = pageText.split('\n').map(l => l.trim()).filter(l => l);
+    debug.push(`Lines found: ${lines.length}`);
+
+    // Sample first 50 lines for debugging
+    debug.push('First 50 lines:');
+    for (let i = 0; i < Math.min(50, lines.length); i++) {
+      debug.push(`  [${i}] ${lines[i]}`);
+    }
+
+    // Look for transaction cards - they follow a pattern:
+    // Type (e.g., "Interest", "Exchange", "Added FIATx")
+    // Date (e.g., "Nov 13, 2025")
+    // Time (e.g., "7:00 AM")
+    // Amount (e.g., "+5,500.00 USDx", "-484.000000 USDT")
+
+    for (let i = 0; i < lines.length - 3; i++) {
+      const line = lines[i];
+      const nextLine = lines[i + 1];
+      const thirdLine = lines[i + 2];
+      const fourthLine = lines[i + 3];
+
+      // Check if next line contains a date pattern (e.g., "Nov 12, 2025")
+      const dateMatch = nextLine.match(/(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2}),\s+(\d{4})/i);
+      if (dateMatch) {
+        const monthMap = {jan:0, feb:1, mar:2, apr:3, may:4, jun:5, jul:6, aug:7, sep:8, oct:9, nov:10, dec:11};
+        const monthName = dateMatch[1].toLowerCase().substring(0, 3);
+        const day = parseInt(dateMatch[2]);
+        const year = parseInt(dateMatch[3]);
+        const month = monthMap[monthName];
+
+        const txDate = new Date(Date.UTC(year, month, day));
+
+        if (txDate.getTime() >= startMs && txDate.getTime() <= endMs) {
+          const type = line;
+          const time = thirdLine;  // Should be time like "7:00 AM"
+
+          // Look for amount in the next few lines
+          // Pattern can be:
+          // 1. Single line: "+5,500.00 USDx" or "-484.000000 USDT"
+          // 2. Three separate lines: "+", "20,000.00", "USDx"
+          let amount = null;
+          let currency = null;
+
+          for (let j = i; j < Math.min(i + 10, lines.length); j++) {
+            const amountLine = lines[j];
+
+            // Try matching single-line pattern first
+            const singleLineMatch = amountLine.match(/([+-]?)(\d{1,}(?:,\d{3})*(?:\.\d+)?)\s*(USD[xCT]?)/);
+            if (singleLineMatch) {
+              const sign = singleLineMatch[1] === '-' ? -1 : 1;
+              const numStr = singleLineMatch[2].replace(/,/g, '');
+              amount = sign * parseFloat(numStr);
+              currency = singleLineMatch[3];
+
+              // Only process USD-based currencies
+              if (currency.startsWith('USD')) {
+                result.push({
+                  date: txDate.toISOString(),
+                  type: type,
+                  amount: amount,
+                  currency: currency,
+                  description: type,
+                  counterparty: '',
+                  _debug: `${line} | ${nextLine} | ${thirdLine} | ${fourthLine}`
+                });
+                debug.push(`Found: ${type} on ${nextLine}, Amount: ${amount} ${currency}`);
+              }
+              break;
+            }
+
+            // Try matching multi-line pattern: sign on one line, amount on next, currency after
+            if (amountLine === '+' || amountLine === '-') {
+              const sign = amountLine === '-' ? -1 : 1;
+              const nextAmount = lines[j + 1];
+              const nextCurrency = lines[j + 2];
+
+              // Check if next line is a number and line after is USD currency
+              const numMatch = nextAmount && nextAmount.match(/^(\d{1,}(?:,\d{3})*(?:\.\d+)?)$/);
+              const currMatch = nextCurrency && nextCurrency.match(/^(USD[xCT]?)$/);
+
+              if (numMatch && currMatch) {
+                const numStr = numMatch[1].replace(/,/g, '');
+                amount = sign * parseFloat(numStr);
+                currency = currMatch[1];
+
+                result.push({
+                  date: txDate.toISOString(),
+                  type: type,
+                  amount: amount,
+                  currency: currency,
+                  description: type,
+                  counterparty: '',
+                  _debug: `${line} | ${nextLine} | ${thirdLine} | ${lines[j]} ${lines[j+1]} ${lines[j+2]}`
+                });
+                debug.push(`Found: ${type} on ${nextLine}, Amount: ${amount} ${currency} (multi-line)`);
+                break;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return { transactions: result, debug };
+  }, startDate.getTime(), endDate.getTime());
+
+  console.log(`[NEXO] Debug info:`, transactions.debug);
+  const txList = transactions.transactions || [];
+
+  console.log(`[NEXO] Found ${txList.length} USD transactions for ${month}-${year}`);
+
+  // Calculate totals
+  let totalIn = 0;
+  let totalOut = 0;
+  const incomingTransfers = [];
+  const outgoingTransfers = [];
+
+  for (const tx of txList) {
+    // Remove debug field before adding to results
+    const cleanTx = { ...tx };
+    delete cleanTx._debug;
+
+    if (tx.amount > 0) {
+      totalIn += tx.amount;
+      incomingTransfers.push(cleanTx);
+    } else if (tx.amount < 0) {
+      totalOut += Math.abs(tx.amount);
+      outgoingTransfers.push({
+        ...cleanTx,
+        amount: Math.abs(tx.amount)
+      });
+    }
+  }
+
+  return {
+    month: Number(month),
+    year: Number(year),
+    totalIn: Math.round(totalIn * 100) / 100,
+    totalOut: Math.round(totalOut * 100) / 100,
+    netAmount: Math.round((totalIn - totalOut) * 100) / 100,
+    incomingTransfers,
+    outgoingTransfers,
+    totalTransactions: txList.length,
+    debug: transactions.debug
+  };
+}
+
 /* Summary homogéneo para Nexo */
 app.get("/nexo/summary", async (req, res) => {
   if (!checkProxyAuth(req, res)) return;
@@ -2748,6 +3282,40 @@ app.get("/nexo/summary", async (req, res) => {
   } catch (e) {
     if (browser) try { await browser.close(); } catch {}
     console.error("Proxy /nexo/summary:", e);
+    return res.status(502).json({ error: "nexo_error", detail: String(e.message || e) });
+  }
+});
+
+/* Nexo transactions endpoint */
+app.get("/nexo/transactions", async (req, res) => {
+  if (!checkProxyAuth(req, res)) return;
+  if (!NEXO_EMAIL || !NEXO_PASSWORD) {
+    return res.status(500).json({ error: "server_misconfig", detail: "Falta NEXO_EMAIL/NEXO_PASSWORD" });
+  }
+
+  const { month, year } = req.query;
+  if (!month || !year) {
+    return res.status(400).json({ error: "bad_request", detail: "month and year are required" });
+  }
+
+  let browser;
+  try {
+    console.log(`[NEXO] Starting transaction fetch for ${month}-${year}`);
+    browser = await launchBrowser();
+    const page = await browser.newPage();
+    await page.setExtraHTTPHeaders({ 'Accept-Language': 'en-US,en;q=0.9,es;q=0.8' });
+    await page.emulateTimezone('Europe/Andorra');
+    await page.setUserAgent("Mozilla/5.0 (Macintosh; Intel Mac OS X) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari");
+
+    await loginIfNeeded(page);
+    const data = await scrapeNexoTransactions(page, month, year);
+
+    await browser.close();
+    console.log(`[NEXO] Successfully fetched ${data.totalTransactions} transactions`);
+    return res.json(data);
+  } catch (e) {
+    if (browser) try { await browser.close(); } catch {}
+    console.error("Proxy /nexo/transactions:", e);
     return res.status(502).json({ error: "nexo_error", detail: String(e.message || e) });
   }
 });

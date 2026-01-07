@@ -130,13 +130,13 @@ function formatPendingPayoutsList(payoutsData) {
 
 function calculateExpectedPayoutAmount_(platformName, baseAmount) {
   if (platformName && platformName.toLowerCase().includes('topstep')) {
-    // Topstep: 90% of original payment, fees can go from $0 to $20. Sometimes they pay 100% of original amount
+    // Topstep: 90% of original payment, fees can go from $0 to $25. Sometimes they pay 100% of original amount
     var expected90 = baseAmount * 0.9;
     var expected100 = baseAmount; // Sometimes 100%
     var expected = expected90; // Default to 90%
     return {
       expected: expected,
-      min: Math.max(expected90 - 20, baseAmount * 0.85),  // Allow $0-$20 fee range
+      min: Math.max(expected90 - 25, baseAmount * 0.85),  // Allow $0-$25 fee range (increased tolerance)
       max: Math.min(expected100, baseAmount),             // Up to 100% of original
       platform: 'Topstep'
     };

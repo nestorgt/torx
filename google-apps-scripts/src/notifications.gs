@@ -40,7 +40,7 @@ function sendPaymentsReceivedNotification(notifications) {
     }
 
     var properties = PropertiesService.getScriptProperties();
-    var webhookUrl = properties.getProperty('SLACK_WEBHOOK_URL_BANK_CARDS');
+    var webhookUrl = properties.getProperty('SLACK_WEBHOOK_URL_BANK-CARDS');
 
     if (!webhookUrl) {
       Logger.log('[SLACK] Missing bank-cards webhook URL');
@@ -50,9 +50,19 @@ function sendPaymentsReceivedNotification(notifications) {
     var messageLines = ['💵 Payments received:'];
     notifications.forEach(function(entry) {
       var reference = entry.reference || 'Unknown';
-      var amount = Number(entry.amount || 0);
-      var formattedAmount = '$' + Math.abs(amount).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
-      messageLines.push('• ' + reference + ' · ' + formattedAmount);
+      var baseAmount = Number(entry.baseAmount || entry.amount || 0);
+      var receivedAmount = Number(entry.receivedAmount || entry.amount || 0);
+
+      var formattedBase = '$' + Math.abs(baseAmount).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+      var formattedReceived = '$' + Math.abs(receivedAmount).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+
+      // Format: Reference $5000 ($4480) if amounts differ, otherwise just $5000
+      var amountStr = formattedBase;
+      if (Math.abs(baseAmount - receivedAmount) > 1) {
+        amountStr = formattedBase + ' (' + formattedReceived + ')';
+      }
+
+      messageLines.push('• ' + reference + ' ' + amountStr);
     });
 
     var message = messageLines.join('\n');
@@ -176,12 +186,39 @@ function generateDailyWeeklySummary() {
     var currentMonthStr = currentYear + '-' + currentMonth.toString().padStart(2, '0');
     var currentMonthRow = -1;
 
+    Logger.log('[SUMMARY] Looking for month: %s (Year=%s, Month=%s)', currentMonthStr, currentYear, currentMonth);
+
     for (var row = 7; row <= lastRow; row++) {
       try {
         var monthValue = sheet.getRange(row, 1).getValue();
-        if (monthValue && String(monthValue).includes(currentMonthStr)) {
+        var monthStr = String(monthValue).trim();
+
+        Logger.log('[SUMMARY] Row %s, Column A: "%s"', row, monthStr);
+
+        // Check multiple formats: "2025-11", "11-2025", "November", "Nov", or Date object
+        var isMatch = false;
+
+        if (monthValue instanceof Date) {
+          // It's a Date object - check month and year
+          var dateMonth = monthValue.getMonth() + 1;
+          var dateYear = monthValue.getFullYear();
+          if (dateMonth === currentMonth && dateYear === currentYear) {
+            isMatch = true;
+            Logger.log('[SUMMARY] Row %s matches as Date: month=%s, year=%s', row, dateMonth, dateYear);
+          }
+        } else if (monthStr.includes(currentMonthStr)) {
+          // String contains "2025-11"
+          isMatch = true;
+          Logger.log('[SUMMARY] Row %s matches string: "%s"', row, monthStr);
+        } else if (monthStr.includes(currentMonth + '-' + currentYear)) {
+          // Format is "11-2025" instead of "2025-11"
+          isMatch = true;
+          Logger.log('[SUMMARY] Row %s matches reversed format: "%s"', row, monthStr);
+        }
+
+        if (isMatch) {
           currentMonthRow = row;
-          Logger.log('[SUMMARY] Found current month row: %s for %s', currentMonthRow, currentMonthStr);
+          Logger.log('[SUMMARY] ✅ Found current month row: %s for %s/%s', currentMonthRow, currentMonth, currentYear);
           break;
         }
       } catch (innerErr) {
@@ -190,78 +227,114 @@ function generateDailyWeeklySummary() {
     }
 
     if (currentMonthRow === -1) {
-      Logger.log('[SUMMARY] Using fallback row 11 for month %s', currentMonthStr);
-      currentMonthRow = 11;
+      // Fallback: row 2 = January (month 1), row 3 = February, ..., row 12 = November (month 11)
+      currentMonthRow = 1 + currentMonth; // Row 2 for Jan, Row 3 for Feb, ..., Row 12 for Nov
+      Logger.log('[SUMMARY] ⚠️ Month not found, using calculated row %s for month %s', currentMonthRow, currentMonth);
     }
 
     try {
+      Logger.log('[SUMMARY] Reading current day data from row %s', currentMonthRow);
       summary.currentDay.farmed = Number(sheet.getRange(currentMonthRow, 2).getValue()) || 0;
+      summary.currentDay.farmedMonth = Number(sheet.getRange(currentMonthRow, 2).getValue()) || 0;
       summary.currentDay.payouts = Number(sheet.getRange(currentMonthRow, 3).getValue()) || 0;
       summary.currentDay.balance = Number(sheet.getRange(currentMonthRow, 4).getValue()) || 0;
-      summary.currentDay.expenses = Number(sheet.getRange(currentMonthRow, 5).getValue()) || 0;
-      summary.currentDay.day1 = Number(sheet.getRange(currentMonthRow, 11).getValue()) || 0;
-      summary.currentDay.day2 = Number(sheet.getRange(currentMonthRow, 12).getValue()) || 0;
-      summary.currentDay.funded = Number(sheet.getRange(currentMonthRow, 13).getValue()) || 0;
+      summary.currentDay.expenses = Number(sheet.getRange(currentMonthRow, 7).getValue()) || 0;
+      summary.currentDay.day1 = Number(sheet.getRange(currentMonthRow, 10).getValue()) || 0;
+      summary.currentDay.day2 = Number(sheet.getRange(currentMonthRow, 11).getValue()) || 0;
+      summary.currentDay.funded = Number(sheet.getRange(currentMonthRow, 12).getValue()) || 0;
       summary.currentDay.pending = Number(sheet.getRange('G21').getValue()) || 0;
       summary.currentDay.pendingPayouts = summary.currentDay.pending + summary.currentDay.payouts;
+
+      Logger.log('[SUMMARY] Current day values: Farmed=$%s, Payouts=$%s, Balance=$%s, Expenses=$%s, Day1=%s, Day2=%s, Funded=%s',
+        summary.currentDay.farmed, summary.currentDay.payouts, summary.currentDay.balance, summary.currentDay.expenses,
+        summary.currentDay.day1, summary.currentDay.day2, summary.currentDay.funded);
     } catch (sheetErr) {
       Logger.log('[SUMMARY] Error reading current month row %s: %s', currentMonthRow, sheetErr.message);
     }
 
-    var previousSnapshot = loadSnapshotForDate(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1));
-    summary.previousDay = sanitizeMetrics(previousSnapshot);
-    summary.hasPreviousDaySnapshot = !!previousSnapshot;
-    
-    // Debug logging
-    if (!previousSnapshot) {
-      summary.previousDay = createEmptyMetrics(); // Use zeros as baseline for first day
-      Logger.log('[SUMMARY] No previous day snapshot – using zeros as baseline');
+    // Load last available snapshot (handles weekends and missed days)
+    var previousSnapshot = loadLastAvailableSnapshot(7);
+
+    // On the 1st of the month, don't compare to previous month's snapshot
+    // because cumulative values reset and deltas would be nonsensical
+    var today = new Date().getDate();
+    if (today === 1) {
+      Logger.log('[SUMMARY] First day of month - skipping previous snapshot comparison');
+      summary.previousDay = createEmptyMetrics(); // Use zeros as baseline for first day of month
+      summary.hasPreviousDaySnapshot = false;
     } else {
-      summary.hasPreviousDaySnapshot = true;
-    }
+      summary.previousDay = sanitizeMetrics(previousSnapshot);
+      summary.hasPreviousDaySnapshot = !!previousSnapshot;
 
-    // Week accumulation: Calculate total for current week ONLY (Monday to today)
-    // We want the absolute difference: (Today's snapshot) - (Last snapshot before this week started)
-    var weekMetrics = createEmptyMetrics();
-
-    // Try to find the most recent snapshot before this week started
-    // Start with Sunday and look back up to 7 days if needed
-    var weekBaselineSnapshot = null;
-    var weekBaselineDate = null;
-
-    for (var lookback = 1; lookback <= 7; lookback++) {
-      var checkDate = new Date(weekStart);
-      checkDate.setDate(weekStart.getDate() - lookback);
-
-      var snapshot = loadSnapshotForDate(checkDate);
-      if (snapshot) {
-        weekBaselineSnapshot = snapshot;
-        weekBaselineDate = checkDate;
-        Logger.log('[SUMMARY] Found week baseline: %s/%s/%s (lookback %s days)',
-          checkDate.getDate(), checkDate.getMonth() + 1, checkDate.getFullYear(), lookback);
-        break;
+      // Debug logging
+      if (!previousSnapshot) {
+        summary.previousDay = createEmptyMetrics(); // Use zeros as baseline if no snapshot
+        Logger.log('[SUMMARY] No previous snapshot found in last 7 days – using zeros as baseline');
+      } else {
+        summary.hasPreviousDaySnapshot = true;
       }
     }
 
-    Logger.log('[SUMMARY] Week calculation: Monday=%s/%s/%s, Baseline=%s, Today=%s/%s/%s',
-      weekStart.getDate(), weekStart.getMonth() + 1, weekStart.getFullYear(),
-      weekBaselineDate ? (weekBaselineDate.getDate() + '/' + (weekBaselineDate.getMonth() + 1) + '/' + weekBaselineDate.getFullYear()) : 'NONE',
-      now.getDate(), now.getMonth() + 1, now.getFullYear());
+    // Week accumulation: Sum up daily deltas from Monday through today (Friday max)
+    // For each weekday, calculate delta from previous day and sum them up
+    var weekMetrics = createEmptyMetrics();
 
-    // The week total is simply: (today's snapshot) - (baseline snapshot)
-    // This gives us the accumulated change from the week start through today
-    if (weekBaselineSnapshot) {
-      weekMetrics = cloneMetrics(summary.currentDay);
-      subtractMetrics(weekMetrics, weekBaselineSnapshot);
-      Logger.log('[SUMMARY] Week = Current - Baseline (Farmed: $%s)', weekMetrics.farmed);
-    } else {
-      // No baseline found, use current day's absolute values
-      weekMetrics = cloneMetrics(summary.currentDay);
-      Logger.log('[SUMMARY] Week = Current (no baseline) (Farmed: $%s)', weekMetrics.farmed);
+    var currentDate = new Date(weekStart);
+    var endDate = new Date(now);
+
+    // Don't go beyond Friday (day 5)
+    var currentDayOfWeek = now.getDay();
+    if (currentDayOfWeek === 0 || currentDayOfWeek === 6) {
+      // Weekend - use Friday as end date
+      endDate = new Date(weekStart);
+      endDate.setDate(weekStart.getDate() + 4); // Friday
     }
 
+    Logger.log('[SUMMARY] Week sum: Monday=%s/%s to %s=%s/%s',
+      weekStart.getDate(), weekStart.getMonth() + 1,
+      endDate.getDay() === 5 ? 'Friday' : 'Today',
+      endDate.getDate(), endDate.getMonth() + 1);
+
+    // Sum up daily deltas for each day in the week
+    while (currentDate <= endDate) {
+      var daySnapshot = loadSnapshotForDate(currentDate);
+      if (daySnapshot) {
+        // Get previous day snapshot
+        var prevDate = new Date(currentDate);
+        prevDate.setDate(prevDate.getDate() - 1);
+        var prevSnapshot = loadSnapshotForDate(prevDate);
+
+        if (prevSnapshot) {
+          // Add this day's delta to week total
+          var dayDelta = cloneMetrics(daySnapshot);
+          subtractMetrics(dayDelta, prevSnapshot);
+          addMetrics(weekMetrics, dayDelta);
+
+          Logger.log('[SUMMARY] Day %s/%s: delta farmed $%s, payouts $%s',
+            currentDate.getDate(), currentDate.getMonth() + 1, dayDelta.farmed, dayDelta.payouts);
+        } else {
+          // First day of week or missing previous snapshot
+          // Only add delta-friendly metrics (farmed), skip cumulative ones (payouts, pending, balance)
+          // since we can't calculate their daily delta without a previous snapshot
+          weekMetrics.farmed += Number(daySnapshot.farmed || 0);
+          weekMetrics.day1 += Number(daySnapshot.day1 || 0);
+          weekMetrics.day2 += Number(daySnapshot.day2 || 0);
+          weekMetrics.funded += Number(daySnapshot.funded || 0);
+          Logger.log('[SUMMARY] Day %s/%s: absolute farmed $%s (no previous, skipping cumulative metrics)',
+            currentDate.getDate(), currentDate.getMonth() + 1, daySnapshot.farmed);
+        }
+      }
+
+      // Move to next day
+      currentDate.setDate(currentDate.getDate() + 1);
+    }
+
+    Logger.log('[SUMMARY] Week total farmed: $%s', weekMetrics.farmed);
     summary.weekCurrent = weekMetrics;
-    
+    // For pendingPayouts week: use payouts delta only (not pending, since pending is a current balance not accumulated)
+    // pending is the current pending amount in G21, not something that should be summed over days
+    summary.weekCurrent.pendingPayouts = summary.weekCurrent.payouts;
+
     // Week comparison: compare current week total vs previous week's total
     var prevWeekMetrics = createEmptyMetrics();
     var prevWeekStart = new Date(weekStart);
@@ -282,15 +355,22 @@ function generateDailyWeeklySummary() {
       dayBeforePrev.setDate(prevWeekDate.getDate() - 1);
       var dayBeforeSnapshot = loadSnapshotForDate(dayBeforePrev);
 
-      var prevDayDelta = cloneMetrics(prevDaySnapshot);
       if (dayBeforeSnapshot) {
+        // Calculate delta and add to accumulation
+        var prevDayDelta = cloneMetrics(prevDaySnapshot);
         subtractMetrics(prevDayDelta, dayBeforeSnapshot);
+        addMetrics(prevWeekMetrics, prevDayDelta);
+      } else {
+        // No previous day snapshot - only add delta-friendly metrics
+        prevWeekMetrics.farmed += Number(prevDaySnapshot.farmed || 0);
+        prevWeekMetrics.day1 += Number(prevDaySnapshot.day1 || 0);
+        prevWeekMetrics.day2 += Number(prevDaySnapshot.day2 || 0);
+        prevWeekMetrics.funded += Number(prevDaySnapshot.funded || 0);
       }
-
-      // Add daily delta to previous week accumulation
-      addMetrics(prevWeekMetrics, prevDayDelta);
     }
     summary.weekPrevious = prevWeekMetrics;
+    // For pendingPayouts week: use payouts delta only (consistent with weekCurrent)
+    summary.weekPrevious.pendingPayouts = summary.weekPrevious.payouts;
     summary.hasPreviousWeekSnapshot = Object.values(prevWeekMetrics).some(function(val) { return val !== 0; });
 
     // Month comparison: load previous month's data
@@ -299,12 +379,30 @@ function generateDailyWeeklySummary() {
     var previousMonthStr = previousYear + '-' + previousMonth.toString().padStart(2, '0');
     var previousMonthRow = -1;
 
+    Logger.log('[SUMMARY] Looking for previous month: %s (Year=%s, Month=%s)', previousMonthStr, previousYear, previousMonth);
+
     for (var row = 7; row <= lastRow; row++) {
       try {
         var monthValue = sheet.getRange(row, 1).getValue();
-        if (monthValue && String(monthValue).includes(previousMonthStr)) {
+        var monthStr = String(monthValue).trim();
+
+        var isMatch = false;
+
+        if (monthValue instanceof Date) {
+          var dateMonth = monthValue.getMonth() + 1;
+          var dateYear = monthValue.getFullYear();
+          if (dateMonth === previousMonth && dateYear === previousYear) {
+            isMatch = true;
+          }
+        } else if (monthStr.includes(previousMonthStr)) {
+          isMatch = true;
+        } else if (monthStr.includes(previousMonth + '-' + previousYear)) {
+          isMatch = true;
+        }
+
+        if (isMatch) {
           previousMonthRow = row;
-          Logger.log('[SUMMARY] Found previous month row: %s for %s', previousMonthRow, previousMonthStr);
+          Logger.log('[SUMMARY] ✅ Found previous month row: %s for %s/%s', previousMonthRow, previousMonth, previousYear);
           break;
         }
       } catch (innerErr) {
@@ -313,28 +411,29 @@ function generateDailyWeeklySummary() {
     }
 
     if (previousMonthRow === -1) {
-      Logger.log('[SUMMARY] Using fallback row %s for previous month %s', currentMonthRow - 1, previousMonthStr);
-      previousMonthRow = currentMonthRow - 1;
+      previousMonthRow = 1 + previousMonth; // Row 2 for Jan, Row 3 for Feb, ..., Row 11 for Oct
+      Logger.log('[SUMMARY] ⚠️ Previous month not found, using calculated row %s for month %s', previousMonthRow, previousMonth);
     }
 
     try {
       summary.monthCurrent.farmed = Number(sheet.getRange(currentMonthRow, 2).getValue()) || 0;
+      summary.monthCurrent.farmedMonth = Number(sheet.getRange(currentMonthRow, 2).getValue()) || 0;
       summary.monthCurrent.payouts = Number(sheet.getRange(currentMonthRow, 3).getValue()) || 0;
       summary.monthCurrent.balance = Number(sheet.getRange(currentMonthRow, 4).getValue()) || 0;
-      summary.monthCurrent.expenses = Number(sheet.getRange(currentMonthRow, 5).getValue()) || 0;
-      summary.monthCurrent.day1 = Number(sheet.getRange(currentMonthRow, 11).getValue()) || 0;
-      summary.monthCurrent.day2 = Number(sheet.getRange(currentMonthRow, 12).getValue()) || 0;
-      summary.monthCurrent.funded = Number(sheet.getRange(currentMonthRow, 13).getValue()) || 0;
+      summary.monthCurrent.expenses = Number(sheet.getRange(currentMonthRow, 7).getValue()) || 0;
+      summary.monthCurrent.day1 = Number(sheet.getRange(currentMonthRow, 10).getValue()) || 0;
+      summary.monthCurrent.day2 = Number(sheet.getRange(currentMonthRow, 11).getValue()) || 0;
+      summary.monthCurrent.funded = Number(sheet.getRange(currentMonthRow, 12).getValue()) || 0;
       summary.monthCurrent.pending = Number(sheet.getRange('G21').getValue()) || 0;
       summary.monthCurrent.pendingPayouts = summary.monthCurrent.pending + summary.monthCurrent.payouts;
 
       summary.monthPrevious.farmed = Number(sheet.getRange(previousMonthRow, 2).getValue()) || 0;
       summary.monthPrevious.payouts = Number(sheet.getRange(previousMonthRow, 3).getValue()) || 0;
       summary.monthPrevious.balance = Number(sheet.getRange(previousMonthRow, 4).getValue()) || 0;
-      summary.monthPrevious.expenses = Number(sheet.getRange(previousMonthRow, 5).getValue()) || 0;
-      summary.monthPrevious.day1 = Number(sheet.getRange(previousMonthRow, 11).getValue()) || 0;
-      summary.monthPrevious.day2 = Number(sheet.getRange(previousMonthRow, 12).getValue()) || 0;
-      summary.monthPrevious.funded = Number(sheet.getRange(previousMonthRow, 13).getValue()) || 0;
+      summary.monthPrevious.expenses = Number(sheet.getRange(previousMonthRow, 7).getValue()) || 0;
+      summary.monthPrevious.day1 = Number(sheet.getRange(previousMonthRow, 10).getValue()) || 0;
+      summary.monthPrevious.day2 = Number(sheet.getRange(previousMonthRow, 11).getValue()) || 0;
+      summary.monthPrevious.funded = Number(sheet.getRange(previousMonthRow, 12).getValue()) || 0;
       summary.monthPrevious.pending = 20000; // Default for previous month
       summary.monthPrevious.pendingPayouts = summary.monthPrevious.pending + summary.monthPrevious.payouts;
     } catch (monthErr) {
@@ -368,29 +467,49 @@ function generateSlackSummaryMessage(summary, today, currentMonth, currentYear) 
 
   message += '📅 *' + today + '/' + currentMonth + '/' + currentYear + '*\n\n';
 
-  var metrics = [
+  var financialMetrics = [
     { label: '💰 Farmed', field: 'farmed', money: true },
     { label: '💸 Pending + Payouts', field: 'pendingPayouts', money: true },
     { label: '🏦 Balance', field: 'balance', money: true },
-    { label: '💳 Expenses', field: 'expenses', money: true },
-    { label: '1️⃣ Day 1', field: 'day1', money: false },
-    { label: '2️⃣ Day 2', field: 'day2', money: false },
-    { label: '✅ Funded', field: 'funded', money: false }
+    { label: '💳 Expenses', field: 'expenses', money: true }
   ];
 
-  metrics.forEach(function(metric) {
+  financialMetrics.forEach(function(metric) {
     var dayCurrent = summary.currentDay[metric.field] || 0;
     var dayPrevious = summary.previousDay[metric.field] || 0;
     var weekCurrentValue = weekCurrent[metric.field] || 0;
-    var weekPreviousValue = weekPrevious[metric.field] || 0;
-    var monthCurrentValue = monthCurrent[metric.field] || dayCurrent;
-    var monthPreviousValue = monthPrevious[metric.field] || dayPrevious;
+    var monthCurrentValue = monthCurrent[metric.field] || 0;
 
     message += metric.label + ':\n';
-    message += '• Day:     ' + formatValue(metric.money, dayCurrent, dayPrevious) + '\n';
-    message += '• Week:   ' + formatValue(metric.money, weekCurrentValue, 0, { showTotal: true, includeDifference: false }) + '\n';
-    message += '• Month:   ' + formatValue(metric.money, monthCurrentValue, monthPreviousValue, { showTotal: true, includeDifference: false }) + '\n\n';
+    message += ('• Day:').padEnd(14) + formatValue(metric.money, dayCurrent, dayPrevious) + '\n';
+
+    // Only show Week for Pending + Payouts (not Farmed)
+    if (metric.field === 'pendingPayouts') {
+      message += ('• Week:').padEnd(14) + formatValue(metric.money, weekCurrentValue, 0, { showTotal: true, includeDifference: false }) + '\n';
+    }
+
+    // Show Total for Farmed (current month row, column B) and Balance; Month for Pending + Payouts and Expenses
+    var monthLabel = (metric.field === 'pendingPayouts' || metric.field === 'expenses') ? 'Month' : 'Total';
+    var totalPadding = (metric.field === 'farmed' || metric.field === 'balance') ? 17 : 14;
+    message += ('• ' + monthLabel + ':').padEnd(totalPadding) + formatValue(metric.money, monthCurrentValue, 0, { showTotal: true, includeDifference: false }) + '\n\n';
   });
+
+  // Compact accounts table
+  var day1Day = summary.currentDay.day1 || 0;
+  var day1DayPrev = summary.previousDay.day1 || 0;
+  var day1Month = monthCurrent.day1 || 0;
+
+  var day2Day = summary.currentDay.day2 || 0;
+  var day2DayPrev = summary.previousDay.day2 || 0;
+  var day2Month = monthCurrent.day2 || 0;
+
+  var fundedDay = summary.currentDay.funded || 0;
+  var fundedDayPrev = summary.previousDay.funded || 0;
+  var fundedMonth = monthCurrent.funded || 0;
+
+  message += 'Accounts:    ' + '1️⃣'.padEnd(8) + '2️⃣'.padEnd(8) + '✅\n';
+  message += ('• Day:').padEnd(16) + formatValue(false, day1Day, day1DayPrev).padEnd(8) + formatValue(false, day2Day, day2DayPrev).padEnd(8) + formatValue(false, fundedDay, fundedDayPrev) + '\n';
+  message += ('• Total:').padEnd(18) + String(day1Month).padEnd(10) + String(day2Month).padEnd(8) + String(fundedMonth) + '\n';
 
   return message;
 }

@@ -95,46 +95,82 @@ function detectAndReconcilePayouts_(dryRun) {
     }
     
     // Check Mercury accounts
+    // Load previously processed Mercury balances to detect only NEW deposits
+    var mercuryProcessedBalances = loadMercuryProcessedBalances_();
+
     try {
       var mercuryAccounts = getMercuryAccounts_();
       for (var i = 0; i < mercuryAccounts.length; i++) {
         var account = mercuryAccounts[i];
         var accountName = account.name || account.displayName || 'Unknown';
+        var accountId = account.id || accountName;
+        // Use nickname for user matching (Mercury accounts have user names in nickname field)
+        var userIdentifier = account.nickname || accountName;
         var currency = account.currency || 'USD';
         var balance = account.balance || 0;
-        
+
         // Skip non-USD accounts
         if (currency.toUpperCase() !== 'USD') continue;
-        
+
         // Skip Main account
         var isMainAccount = (
-          (account.name ? account.name.includes('2290') : false) || 
+          (account.name ? account.name.includes('2290') : false) ||
           (account.nickname ? account.nickname.includes('2290') : false) ||
           account.isMainAccount === true ||
           (account.nickname ? account.nickname.toLowerCase().includes('main') : false)
         );
-        
+
         if (isMainAccount) continue;
-        
+
         if (balance > 0) {
-          result.detected++;
-          Logger.log('[TRANSFERS] Detected Mercury transfer: $%s USD on %s (non-Main account)', balance, accountName);
-          
-          if (!dryRun) {
-            try {
-              var reconciliationResult = reconcileTransferWithSpreadsheet(balance, 'Mercury', accountName);
-              if (reconciliationResult.success) {
-                result.reconciled++;
-                Logger.log('[TRANSFERS] ✅ Mercury transfer reconciled: %s', reconciliationResult.message);
-              } else {
-                Logger.log('[TRANSFERS] ⚠️ Mercury transfer not reconciled: %s', reconciliationResult.error);
+          // Calculate the NEW deposit amount (delta from last known balance)
+          var lastKnownBalance = mercuryProcessedBalances[accountId] || 0;
+          var newDeposit = balance - lastKnownBalance;
+
+          Logger.log('[TRANSFERS] Mercury account %s (nickname: %s): Current=$%s, LastKnown=$%s, NewDeposit=$%s',
+            accountName, userIdentifier, balance, lastKnownBalance, newDeposit);
+
+          // Only reconcile if there's a NEW deposit (delta > 0)
+          if (newDeposit > 0) {
+            result.detected++;
+            Logger.log('[TRANSFERS] Detected NEW Mercury deposit: $%s USD on %s (nickname: %s)', newDeposit, accountName, userIdentifier);
+
+            if (!dryRun) {
+              try {
+                // Use userIdentifier (nickname) for reconciliation to match user names
+                // Reconcile only the NEW deposit amount, not the total balance
+                var reconciliationResult = reconcileTransferWithSpreadsheet(newDeposit, 'Mercury', userIdentifier);
+                if (reconciliationResult.success) {
+                  result.reconciled++;
+                  Logger.log('[TRANSFERS] ✅ Mercury transfer reconciled: %s', reconciliationResult.message);
+                  // Update the processed balance after successful reconciliation
+                  mercuryProcessedBalances[accountId] = balance;
+                } else {
+                  Logger.log('[TRANSFERS] ⚠️ Mercury transfer not reconciled: %s', reconciliationResult.error);
+                  // Still update the balance to avoid re-trying the same amount
+                  // The payout might not exist in the sheet yet
+                  mercuryProcessedBalances[accountId] = balance;
+                }
+              } catch (e) {
+                Logger.log('[ERROR] Mercury transfer reconciliation failed: %s', e.message);
+                result.errors.push('Mercury reconciliation: ' + e.message);
               }
-            } catch (e) {
-              Logger.log('[ERROR] Mercury transfer reconciliation failed: %s', e.message);
-              result.errors.push('Mercury reconciliation: ' + e.message);
             }
+          } else if (balance > 0 && newDeposit === 0) {
+            Logger.log('[TRANSFERS] Mercury account %s: No new deposits (balance unchanged at $%s)', accountName, balance);
+          }
+        } else {
+          // Balance is 0, clear the processed balance tracking
+          if (mercuryProcessedBalances[accountId]) {
+            Logger.log('[TRANSFERS] Mercury account %s: Balance cleared (was $%s, now $0)', accountName, mercuryProcessedBalances[accountId]);
+            delete mercuryProcessedBalances[accountId];
           }
         }
+      }
+
+      // Save updated processed balances
+      if (!dryRun) {
+        saveMercuryProcessedBalances_(mercuryProcessedBalances);
       }
     } catch (e) {
       Logger.log('[ERROR] Mercury transfer detection failed: %s', e.message);
@@ -189,6 +225,9 @@ function detectAndReconcilePayouts_(dryRun) {
       result.errors.push('Mercury transaction processing: ' + merTxErr.message);
     }
 
+    // Note: Revolut transaction processing disabled - endpoint /revolut/recent-transactions not available
+    // Revolut reconciliation happens during consolidation step instead
+
     // Persist processed transaction ids
     if (!dryRun && processedTxnState.changed) {
       saveProcessedPayoutTransactions_(processedTxnState.data);
@@ -220,20 +259,59 @@ function getTransfersByBank_(bankName) {
   }
 }
 
+function getUserIdFromAccountName_(accountName) {
+  /*
+   * Look up user ID (e.g., "T-11-Cris") from full name (e.g., "Cristina Otero Blanco")
+   * Uses the Users sheet: L1 has user IDs, L7 has full names
+   */
+  try {
+    var usersSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Users');
+    if (!usersSheet) {
+      Logger.log('[WARN] Users sheet not found, cannot match account name to user');
+      return null;
+    }
+
+    // Get user IDs from row 1 (L1, M1, N1, etc.)
+    var userIds = usersSheet.getRange(1, 12, 1, 20).getValues()[0]; // L1:AE1
+
+    // Get full names from row 7 (L7, M7, N7, etc.)
+    var fullNames = usersSheet.getRange(7, 12, 1, 20).getValues()[0]; // L7:AE7
+
+    // Find matching full name
+    for (var i = 0; i < fullNames.length; i++) {
+      var fullName = String(fullNames[i] || '').trim();
+      if (fullName && accountName.indexOf(fullName) >= 0) {
+        var userId = String(userIds[i] || '').trim();
+        Logger.log('[USER_MATCH] Account "%s" matched to user "%s" (full name: "%s")', accountName, userId, fullName);
+        return userId;
+      }
+    }
+
+    Logger.log('[USER_MATCH] No user match found for account name: "%s"', accountName);
+    return null;
+  } catch (e) {
+    Logger.log('[ERROR] getUserIdFromAccountName_ failed: %s', e.message);
+    return null;
+  }
+}
+
 function reconcileTransferWithSpreadsheet(receivedAmount, bankName, accountName) {
   /*
    * 🔄 RECONCILE ALL TRANSFERS WITH SPREADSHEET
-   * 
+   *
    * This function reconciles ANY incoming transfer (not just payouts)
    * with the Payouts sheet, marking them as "Received" in column H
-   * 
+   *
    * @param {number} receivedAmount - Amount received
    * @param {string} bankName - Bank name (Mercury/Revolut)
    * @param {string} accountName - Account name where transfer was received
    */
   try {
     Logger.log('[TRANSFER_RECONCILE] Reconciling transfer: $' + receivedAmount + ' from ' + bankName + ' (' + accountName + ')');
-    
+
+    // Look up which user this account belongs to
+    var expectedUserId = getUserIdFromAccountName_(accountName);
+
     var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Payouts');
     if (!sheet) {
       Logger.log('[ERROR] Could not find Payouts sheet');
@@ -259,7 +337,7 @@ function reconcileTransferWithSpreadsheet(receivedAmount, bankName, accountName)
     }
     
     var bestMatch = { row: -1, score: 0, adjustment: 0 };
-    
+
     // Look for unmatched payouts that could match this received amount
     for (var i = 0; i < payoutData.length; i++) {
       var row = payoutData[i];
@@ -270,6 +348,12 @@ function reconcileTransferWithSpreadsheet(receivedAmount, bankName, accountName)
 
       // Skip empty rows (no user name)
       if (!userName) {
+        continue;
+      }
+
+      // Skip if this payout doesn't belong to the expected user
+      if (expectedUserId && userName !== expectedUserId) {
+        Logger.log('[TRANSFER_RECONCILE] Row ' + (i + 22) + ': SKIPPED (wrong user) - User="' + userName + '", Expected="' + expectedUserId + '"');
         continue;
       }
 
@@ -326,7 +410,11 @@ function reconcileTransferWithSpreadsheet(receivedAmount, bankName, accountName)
       var referenceValue = sheet.getRange(reconcileRow, 1).getValue();
       Logger.log('[TRANSFER_RECONCILE] Reference value from Column A: "' + referenceValue + '"');
 
-      sendPaymentsReceivedNotification([{ reference: referenceValue, amount: receivedAmount }]);
+      sendPaymentsReceivedNotification([{
+        reference: referenceValue,
+        baseAmount: bestMatch.baseAmount,
+        receivedAmount: receivedAmount
+      }]);
       
       // Add adjustment note if needed
       if (Math.abs(adjustmentAmount) > 10) { // Only note significant adjustments
@@ -354,6 +442,10 @@ function reconcileTransferWithSpreadsheet(receivedAmount, bankName, accountName)
 
       // Try to find combinations of pending payouts that might match this amount
       Logger.log('[TRANSFER_RECONCILE] 💡 Checking for possible combinations of multiple payouts...');
+      if (expectedUserId) {
+        Logger.log('[TRANSFER_RECONCILE] 💡 Filtering combinations for user: %s', expectedUserId);
+      }
+
       var pendingPayouts = [];
       for (var i = 0; i < payoutData.length; i++) {
         var row = payoutData[i];
@@ -363,6 +455,9 @@ function reconcileTransferWithSpreadsheet(receivedAmount, bankName, accountName)
         var received = row[7];
 
         if (!userName || received === true || baseAmount <= 0) continue;
+
+        // If we know which user this account belongs to, only consider their payouts
+        if (expectedUserId && userName !== expectedUserId) continue;
 
         var expectedCalc = calculateExpectedPayoutAmount_(platform, baseAmount);
         pendingPayouts.push({
@@ -376,13 +471,27 @@ function reconcileTransferWithSpreadsheet(receivedAmount, bankName, accountName)
         });
       }
 
-      // Check for 2-payout combinations
+      Logger.log('[TRANSFER_RECONCILE] 💡 Found %s pending payouts to check', pendingPayouts.length);
+
+      // Check for 2-payout combinations and find the best match
+      var bestCombo = null;
+      var bestDiff = Infinity;
+      var tolerance = receivedAmount * 0.05; // 5% tolerance
+
       for (var a = 0; a < pendingPayouts.length; a++) {
         for (var b = a + 1; b < pendingPayouts.length; b++) {
-          var combo = pendingPayouts[a].expected + pendingPayouts[b].expected;
-          var tolerance = receivedAmount * 0.05; // 5% tolerance
+          // Only combine payouts from the same user and same platform
+          if (pendingPayouts[a].user !== pendingPayouts[b].user) {
+            continue; // Different users - skip
+          }
+          if (pendingPayouts[a].platform !== pendingPayouts[b].platform) {
+            continue; // Different platforms - skip
+          }
 
-          if (Math.abs(combo - receivedAmount) < tolerance) {
+          var combo = pendingPayouts[a].expected + pendingPayouts[b].expected;
+          var diff = Math.abs(combo - receivedAmount);
+
+          if (diff < tolerance) {
             Logger.log('[TRANSFER_RECONCILE] 💡 POSSIBLE MATCH - Two payouts:');
             Logger.log('[TRANSFER_RECONCILE]   Row %s: %s - %s $%s (expected: $%s)',
               pendingPayouts[a].row, pendingPayouts[a].user, pendingPayouts[a].platform,
@@ -391,9 +500,159 @@ function reconcileTransferWithSpreadsheet(receivedAmount, bankName, accountName)
               pendingPayouts[b].row, pendingPayouts[b].user, pendingPayouts[b].platform,
               pendingPayouts[b].base, pendingPayouts[b].expected);
             Logger.log('[TRANSFER_RECONCILE]   Combined expected: $%s, Received: $%s (diff: $%s)',
-              combo, receivedAmount, Math.abs(combo - receivedAmount));
+              combo, receivedAmount, diff);
+
+            // Track the best match
+            // If difference is the same, prefer older payouts (higher row numbers)
+            var shouldUpdate = false;
+            if (diff < bestDiff) {
+              shouldUpdate = true;
+            } else if (diff === bestDiff && bestCombo) {
+              // Same difference - prefer the combination with older (higher row number) payouts
+              var currentMaxRow = Math.max(pendingPayouts[a].row, pendingPayouts[b].row);
+              var bestMaxRow = Math.max(bestCombo.payoutA.row, bestCombo.payoutB.row);
+              if (currentMaxRow > bestMaxRow) {
+                shouldUpdate = true;
+              }
+            }
+
+            if (shouldUpdate) {
+              bestDiff = diff;
+              bestCombo = {
+                payoutA: pendingPayouts[a],
+                payoutB: pendingPayouts[b],
+                combo: combo,
+                diff: diff
+              };
+            }
           }
         }
+      }
+
+      // Check for 3-payout combinations if no 2-payout match was found
+      if (!bestCombo || bestDiff >= tolerance) {
+        for (var a = 0; a < pendingPayouts.length; a++) {
+          for (var b = a + 1; b < pendingPayouts.length; b++) {
+            for (var c = b + 1; c < pendingPayouts.length; c++) {
+              // Only combine payouts from the same user and same platform
+              if (pendingPayouts[a].user !== pendingPayouts[b].user ||
+                  pendingPayouts[a].user !== pendingPayouts[c].user) {
+                continue; // Different users - skip
+              }
+              if (pendingPayouts[a].platform !== pendingPayouts[b].platform ||
+                  pendingPayouts[a].platform !== pendingPayouts[c].platform) {
+                continue; // Different platforms - skip
+              }
+
+              var combo = pendingPayouts[a].expected + pendingPayouts[b].expected + pendingPayouts[c].expected;
+              var diff = Math.abs(combo - receivedAmount);
+
+              if (diff < tolerance && diff < bestDiff) {
+                Logger.log('[TRANSFER_RECONCILE] 💡 POSSIBLE MATCH - Three payouts:');
+                Logger.log('[TRANSFER_RECONCILE]   Row %s: %s - %s $%s (expected: $%s)',
+                  pendingPayouts[a].row, pendingPayouts[a].user, pendingPayouts[a].platform,
+                  pendingPayouts[a].base, pendingPayouts[a].expected);
+                Logger.log('[TRANSFER_RECONCILE]   Row %s: %s - %s $%s (expected: $%s)',
+                  pendingPayouts[b].row, pendingPayouts[b].user, pendingPayouts[b].platform,
+                  pendingPayouts[b].base, pendingPayouts[b].expected);
+                Logger.log('[TRANSFER_RECONCILE]   Row %s: %s - %s $%s (expected: $%s)',
+                  pendingPayouts[c].row, pendingPayouts[c].user, pendingPayouts[c].platform,
+                  pendingPayouts[c].base, pendingPayouts[c].expected);
+                Logger.log('[TRANSFER_RECONCILE]   Combined expected: $%s, Received: $%s (diff: $%s)',
+                  combo, receivedAmount, diff);
+
+                bestDiff = diff;
+                bestCombo = {
+                  payoutA: pendingPayouts[a],
+                  payoutB: pendingPayouts[b],
+                  payoutC: pendingPayouts[c],
+                  combo: combo,
+                  diff: diff,
+                  count: 3
+                };
+              }
+            }
+          }
+        }
+      }
+
+      // If we found a good combination match, automatically mark the rows
+      if (bestCombo && bestDiff < tolerance) {
+        var isThreePayout = bestCombo.count === 3;
+
+        if (isThreePayout) {
+          Logger.log('[TRANSFER_RECONCILE] ✅ Auto-marking BEST MATCH - Three payouts:');
+          Logger.log('[TRANSFER_RECONCILE]   Row %s: %s - %s $%s',
+            bestCombo.payoutA.row, bestCombo.payoutA.user, bestCombo.payoutA.platform, bestCombo.payoutA.base);
+          Logger.log('[TRANSFER_RECONCILE]   Row %s: %s - %s $%s',
+            bestCombo.payoutB.row, bestCombo.payoutB.user, bestCombo.payoutB.platform, bestCombo.payoutB.base);
+          Logger.log('[TRANSFER_RECONCILE]   Row %s: %s - %s $%s',
+            bestCombo.payoutC.row, bestCombo.payoutC.user, bestCombo.payoutC.platform, bestCombo.payoutC.base);
+        } else {
+          Logger.log('[TRANSFER_RECONCILE] ✅ Auto-marking BEST MATCH - Two payouts:');
+          Logger.log('[TRANSFER_RECONCILE]   Row %s: %s - %s $%s',
+            bestCombo.payoutA.row, bestCombo.payoutA.user, bestCombo.payoutA.platform, bestCombo.payoutA.base);
+          Logger.log('[TRANSFER_RECONCILE]   Row %s: %s - %s $%s',
+            bestCombo.payoutB.row, bestCombo.payoutB.user, bestCombo.payoutB.platform, bestCombo.payoutB.base);
+        }
+
+        Logger.log('[TRANSFER_RECONCILE]   Combined: $%s, Received: $%s, Diff: $%s',
+          bestCombo.combo, receivedAmount, bestCombo.diff);
+
+        // Mark rows as received
+        var note = 'Combined payout from ' + bankName + ' (' + accountName + ') - $' + receivedAmount;
+        var matchedRows = [];
+        var notifications = [];
+
+        // Mark first payout
+        var rowA = bestCombo.payoutA.row;
+        sheet.getRange(rowA, 8).setValue(true);
+        sheet.getRange(rowA, 8).setNote(note);
+        Logger.log('[TRANSFER_RECONCILE] ✅ Marked row %s as received', rowA);
+        matchedRows.push(rowA);
+
+        // Mark second payout
+        var rowB = bestCombo.payoutB.row;
+        sheet.getRange(rowB, 8).setValue(true);
+        sheet.getRange(rowB, 8).setNote(note);
+        Logger.log('[TRANSFER_RECONCILE] ✅ Marked row %s as received', rowB);
+        matchedRows.push(rowB);
+
+        // Mark third payout if it exists
+        if (isThreePayout) {
+          var rowC = bestCombo.payoutC.row;
+          sheet.getRange(rowC, 8).setValue(true);
+          sheet.getRange(rowC, 8).setNote(note);
+          Logger.log('[TRANSFER_RECONCILE] ✅ Marked row %s as received', rowC);
+          matchedRows.push(rowC);
+        }
+
+        // Calculate proportional received amounts for notifications
+        var totalBase = bestCombo.payoutA.base + bestCombo.payoutB.base + (isThreePayout ? bestCombo.payoutC.base : 0);
+        var receivedA = Math.round((bestCombo.payoutA.base / totalBase) * receivedAmount);
+        var receivedB = Math.round((bestCombo.payoutB.base / totalBase) * receivedAmount);
+        var receivedC = isThreePayout ? (receivedAmount - receivedA - receivedB) : 0;
+
+        var referenceA = bestCombo.payoutA.user + ' - ' + bestCombo.payoutA.platform;
+        var referenceB = bestCombo.payoutB.user + ' - ' + bestCombo.payoutB.platform;
+
+        notifications.push({ reference: referenceA, baseAmount: bestCombo.payoutA.base, receivedAmount: receivedA });
+        notifications.push({ reference: referenceB, baseAmount: bestCombo.payoutB.base, receivedAmount: receivedB });
+
+        if (isThreePayout) {
+          var referenceC = bestCombo.payoutC.user + ' - ' + bestCombo.payoutC.platform;
+          notifications.push({ reference: referenceC, baseAmount: bestCombo.payoutC.base, receivedAmount: receivedC });
+        }
+
+        sendPaymentsReceivedNotification(notifications);
+
+        return {
+          success: true,
+          matchedRows: matchedRows,
+          combo: true,
+          message: 'Reconciled combination: ' + matchedRows.join(' + ') + ' (diff: $' + bestCombo.diff.toFixed(2) + ')',
+          note: note
+        };
       }
 
       return {
@@ -521,5 +780,56 @@ function clearCompletedTransfer_(transactionId) {
    * Alias for clearPendingTransfer_ for backward compatibility
    */
   return clearPendingTransfer_(transactionId);
+}
+
+function loadMercuryProcessedBalances_() {
+  /*
+   * Load previously processed Mercury account balances from PropertiesService
+   * Used for delta-based reconciliation: only reconcile NEW deposits
+   * Returns: { accountId: lastKnownBalance, ... }
+   */
+  try {
+    var properties = PropertiesService.getScriptProperties();
+    var data = properties.getProperty('mercury_processed_balances');
+    if (!data) {
+      Logger.log('[MERCURY_BALANCES] No previous balances found, starting fresh');
+      return {};
+    }
+    var balances = JSON.parse(data);
+    Logger.log('[MERCURY_BALANCES] Loaded processed balances for %s accounts', Object.keys(balances).length);
+    return balances;
+  } catch (e) {
+    Logger.log('[ERROR] Failed to load Mercury processed balances: %s', e.message);
+    return {};
+  }
+}
+
+function saveMercuryProcessedBalances_(balances) {
+  /*
+   * Save processed Mercury account balances to PropertiesService
+   * Called after successful reconciliation to track what we've already processed
+   */
+  try {
+    var properties = PropertiesService.getScriptProperties();
+    properties.setProperty('mercury_processed_balances', JSON.stringify(balances));
+    Logger.log('[MERCURY_BALANCES] Saved processed balances for %s accounts', Object.keys(balances).length);
+  } catch (e) {
+    Logger.log('[ERROR] Failed to save Mercury processed balances: %s', e.message);
+  }
+}
+
+function clearMercuryProcessedBalances_() {
+  /*
+   * Clear all Mercury processed balances (useful for testing/reset)
+   */
+  try {
+    var properties = PropertiesService.getScriptProperties();
+    properties.deleteProperty('mercury_processed_balances');
+    Logger.log('[MERCURY_BALANCES] Cleared all processed balances');
+    return true;
+  } catch (e) {
+    Logger.log('[ERROR] Failed to clear Mercury processed balances: %s', e.message);
+    return false;
+  }
 }
 

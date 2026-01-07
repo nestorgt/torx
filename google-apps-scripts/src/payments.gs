@@ -153,31 +153,65 @@ function payUsersForPreviousMonth() {
 
 function dryRunPayUsersForMonth(monthStr) {
   Logger.log('[DRY_RUN] Starting dry run for month: %s', monthStr);
-  
+
   try {
-    // This is a placeholder - would contain actual dry run logic
-    // For now, return a mock result
+    // Get actual payment data from sheet
+    var paymentData = getPaymentDataForMonth_(monthStr);
+
+    if (!paymentData || paymentData.length === 0) {
+      Logger.log('[DRY_RUN] No users to pay for month: %s', monthStr);
+      return {
+        month: monthStr,
+        totalUsers: 0,
+        totalPayoutUsd: 0,
+        totalPayoutEur: 0,
+        users: [],
+        dryRun: true,
+        timestamp: new Date().toISOString()
+      };
+    }
+
+    // Calculate totals and build user list
+    var totalEur = 0;
+    var users = [];
+
+    for (var i = 0; i < paymentData.length; i++) {
+      var userData = paymentData[i];
+      var userName = userData[0];
+      var amount = userData[1];
+      var currency = userData[2];
+      var accountIdentifier = userData[3];
+
+      totalEur += amount;
+
+      users.push({
+        name: userName,
+        amount: amount,
+        currency: currency,
+        recipient: accountIdentifier
+      });
+
+      Logger.log('[DRY_RUN] Would pay: %s -> €%s to %s', userName, amount, accountIdentifier);
+    }
+
+    // Estimate USD equivalent (rough estimate at 1.08 EUR/USD)
+    var estimatedUsd = totalEur / 1.08;
+
     var result = {
       month: monthStr,
-      totalUsers: 5,
-      totalPayoutUsd: 1250.00,
-      totalPayoutEur: 1500.00,
-      users: [
-        { name: 'User1', amount: 250, currency: 'EUR' },
-        { name: 'User2', amount: 300, currency: 'EUR' },
-        { name: 'User3', amount: 200, currency: 'EUR' },
-        { name: 'User4', amount: 400, currency: 'EUR' },
-        { name: 'User5', amount: 350, currency: 'EUR' }
-      ],
+      totalUsers: paymentData.length,
+      totalPayoutUsd: estimatedUsd,
+      totalPayoutEur: totalEur,
+      users: users,
       dryRun: true,
       timestamp: new Date().toISOString()
     };
-    
-    Logger.log('[DRY_RUN] Dry run completed: %s users, $%s USD, €%s EUR', 
+
+    Logger.log('[DRY_RUN] Dry run completed: %s users, ~$%s USD, €%s EUR',
                result.totalUsers, result.totalPayoutUsd.toFixed(2), result.totalPayoutEur.toFixed(2));
-    
+
     return result;
-    
+
   } catch (e) {
     Logger.log('[ERROR] Dry run failed: %s', e.message);
     throw e;
@@ -196,7 +230,55 @@ function payUsersForMonth(monthStr) {
     }
     
     Logger.log('[PAY_USERS] Found %s users to pay for %s', paymentData.length, monthStr);
-    
+
+    // Calculate total EUR needed
+    var totalEurNeeded = 0;
+    for (var i = 0; i < paymentData.length; i++) {
+      totalEurNeeded += paymentData[i][1]; // amount is at index 1
+    }
+
+    Logger.log('[PAY_USERS] Total EUR needed: €%s', totalEurNeeded);
+
+    // Check current Main EUR balance
+    var currentEurBalance = 0;
+    try {
+      var revolutSummary = fetchRevolutSummary_();
+      currentEurBalance = revolutSummary.EUR || 0;
+      Logger.log('[PAY_USERS] Current Main EUR balance: €%s', currentEurBalance);
+    } catch (balErr) {
+      Logger.log('[PAY_USERS] ⚠️ Failed to fetch EUR balance: %s', balErr.message);
+    }
+
+    // Calculate EUR shortfall (how much we need to exchange from USD)
+    var eurShortfall = totalEurNeeded - currentEurBalance;
+
+    // Do bulk USD -> EUR exchange only if we need more EUR
+    if (eurShortfall > 0) {
+      try {
+        var exchangePayload = {
+          fromName: 'Main',
+          fromCcy: 'USD',
+          toName: 'Main',
+          toCcy: 'EUR',
+          amount: Math.ceil(eurShortfall * 1.15), // 15% buffer for exchange rate + safety
+          reference: 'Bulk exchange for ' + monthStr + ' payments'
+        };
+
+        Logger.log('[PAY_USERS] EUR shortfall: €%s - Exchanging USD -> EUR: %s', eurShortfall, JSON.stringify(exchangePayload));
+        var exchangeResponse = httpProxyPostJson_('/revolut/exchange', exchangePayload);
+
+        if (exchangeResponse && exchangeResponse.ok) {
+          Logger.log('[PAY_USERS] ✅ Bulk exchange successful: %s', exchangeResponse.exchange_id || 'completed');
+        } else {
+          Logger.log('[PAY_USERS] ⚠️ Bulk exchange failed: %s', exchangeResponse ? exchangeResponse.error : 'Unknown error');
+        }
+      } catch (exchangeErr) {
+        Logger.log('[PAY_USERS] ⚠️ Bulk exchange error: %s', exchangeErr.message);
+      }
+    } else {
+      Logger.log('[PAY_USERS] ✅ Sufficient EUR balance (€%s), no exchange needed', currentEurBalance);
+    }
+
     var results = {
       month: monthStr,
       totalUsers: paymentData.length,
@@ -207,7 +289,7 @@ function payUsersForMonth(monthStr) {
       errors: [],
       timestamp: nowStamp_()
     };
-    
+
     // Process each user payment
     for (var i = 0; i < paymentData.length; i++) {
       var userData = paymentData[i];
@@ -348,5 +430,167 @@ function menuPaySpecificMonth() {
     var ui = SpreadsheetApp.getUi();
     ui.alert('❌ Payment Error', 'Failed to process payments for specific month:\n\n' + e.message, ui.ButtonSet.OK);
   }
+}
+
+/**
+ * Get payment data for a specific month from Users sheet
+ * Returns array of [userName, amount, currency, accountName/phone]
+ */
+function getPaymentDataForMonth_(monthStr) {
+  try {
+    Logger.log('[PAYMENT_DATA] Getting payment data for month: %s', monthStr);
+
+    var usersSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Users');
+    if (!usersSheet) {
+      Logger.log('[ERROR] Users sheet not found');
+      return [];
+    }
+
+    // Find the month row
+    var monthRow = findExistingMonthRow_(usersSheet, monthStr);
+    if (!monthRow) {
+      Logger.log('[PAYMENT_DATA] Month row not found for: %s', monthStr);
+      return [];
+    }
+
+    Logger.log('[PAYMENT_DATA] Found month row: %s', monthRow);
+
+    var paymentData = [];
+    var lastColumn = usersSheet.getLastColumn();
+
+    Logger.log('[PAYMENT_DATA] Scanning columns %s to %s for users', USERS_FIRST_COLUMN, lastColumn);
+
+    // Iterate through user columns (starting from column 2 = B)
+    for (var col = USERS_FIRST_COLUMN; col <= lastColumn; col++) {
+      var userId = String(usersSheet.getRange(1, col).getValue() || '').trim();
+      if (!userId) {
+        Logger.log('[PAYMENT_DATA] Column %s: No user ID, skipping', col);
+        continue;
+      }
+
+      // Check if user is active (row 28)
+      var isActive = toBool_(usersSheet.getRange(28, col).getValue());
+      if (!isActive) {
+        Logger.log('[PAYMENT_DATA] Column %s - %s: Inactive (row 28 = %s)', col, userId, usersSheet.getRange(28, col).getValue());
+        continue;
+      }
+
+      // Get monthly payment amount (row 29)
+      var monthlyAmount = Number(usersSheet.getRange(29, col).getValue()) || 0;
+      if (monthlyAmount <= 0) {
+        Logger.log('[PAYMENT_DATA] Column %s - %s: No payment amount (row 29 = %s)', col, userId, usersSheet.getRange(29, col).getValue());
+        continue;
+      }
+
+      // Check if already paid for this month
+      var paidValue = usersSheet.getRange(monthRow, col).getValue();
+      if (paidValue && String(paidValue).trim() !== '') {
+        Logger.log('[PAYMENT_DATA] Column %s - %s: Already paid (row %s = %s)', col, userId, monthRow, paidValue);
+        continue;
+      }
+
+      // Use the userId (Row 1) as the recipient identifier
+      // Currency is always EUR for user payments (target accounts are EUR)
+      var currency = 'EUR';
+
+      paymentData.push([userId, monthlyAmount, currency, userId]);
+      Logger.log('[PAYMENT_DATA] Added user: %s -> €%s', userId, monthlyAmount);
+    }
+
+    Logger.log('[PAYMENT_DATA] Found %s users to pay for %s', paymentData.length, monthStr);
+    return paymentData;
+
+  } catch (e) {
+    Logger.log('[ERROR] Failed to get payment data: %s', e.message);
+    return [];
+  }
+}
+
+/**
+ * Process individual user payment
+ */
+function processUserPayment_(userName, amount, targetCurrency, accountIdentifier, monthStr) {
+  Logger.log('[USER_PAYMENT] Processing: %s %s %s to %s (%s)', amount, targetCurrency, accountIdentifier, userName, monthStr);
+
+  try {
+    // Create transfer request via proxy
+    var requestId = nowStamp_().replace(/[^0-9]/g, '') + '-' + userName.replace(/[^a-zA-Z0-9]/g, '');
+
+    var payload = {
+      toName: accountIdentifier,
+      amount: amount,
+      currency: targetCurrency,
+      reference: 'Payment ' + monthStr + ' - ' + userName,
+      request_id: requestId
+    };
+
+    Logger.log('[USER_PAYMENT] Sending transfer request: %s', JSON.stringify(payload, null, 2));
+
+    // Call Revolut transfer API via proxy
+    var response = httpProxyPostJson_('/revolut/transfer', payload);
+
+    if (response && response.ok) {
+      Logger.log('[USER_PAYMENT] ✅ Transfer successful: %s', response.transfer_id || requestId);
+
+      // Mark as paid in Users sheet
+      markUserAsPaid_(userName, monthStr, amount, requestId);
+
+      return {
+        success: true,
+        transactionId: response.transfer_id || requestId,
+        usdAmount: response.usd_deducted || 0,
+        exchangeRate: response.exchange_rate || 0,
+        message: 'Payment successful'
+      };
+    } else {
+      throw new Error('Transfer failed: ' + (response?.error || 'Unknown error'));
+    }
+
+  } catch (e) {
+    Logger.log('[ERROR] User payment failed: %s', e.message);
+    return {
+      success: false,
+      error: e.message,
+      usdAmount: 0,
+      exchangeRate: 0
+    };
+  }
+}
+
+/**
+ * Mark user as paid in Users sheet
+ */
+function markUserAsPaid_(userName, monthStr, amount, transactionId) {
+  try {
+    var usersSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Users');
+    if (!usersSheet) return;
+
+    var monthRow = findExistingMonthRow_(usersSheet, monthStr);
+    if (!monthRow) return;
+
+    // Find user column (starting from column 2 = B)
+    var lastColumn = usersSheet.getLastColumn();
+    for (var col = USERS_FIRST_COLUMN; col <= lastColumn; col++) {
+      var userId = String(usersSheet.getRange(1, col).getValue() || '').trim();
+      Logger.log('[MARK_PAID] Checking column %s: "%s" vs "%s"', col, userId, userName);
+      if (userId === userName) {
+        // Mark as paid with amount
+        usersSheet.getRange(monthRow, col).setValue(amount);
+        Logger.log('[MARK_PAID] ✅ Marked %s as paid for %s: €%s (txn: %s)', userName, monthStr, amount, transactionId);
+        return;
+      }
+    }
+
+    Logger.log('[MARK_PAID] User not found: %s', userName);
+  } catch (e) {
+    Logger.log('[ERROR] Failed to mark user as paid: %s', e.message);
+  }
+}
+
+/**
+ * Alias for dryRunPayUsersForMonth to match menu function call
+ */
+function dryRunPayUsersForSpecificMonth(monthStr) {
+  return dryRunPayUsersForMonth(monthStr);
 }
 
