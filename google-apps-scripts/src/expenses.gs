@@ -91,23 +91,39 @@ function calculateMonthlyExpensesTotal(month, year) {
   }
   
   // ===== REVOLUT-TO-NESTOR TRANSFERS (revtag) =====
-  // NEW LOGIC (Jan 2026+): All Revolut→Nestor transfers count as expenses (revtag)
-  // Nexo deposits now come via direct SWIFT from Revolut Business, not through Nestor
+  // CUTOFF: Jan 15, 2026
+  // - Before cutoff: Match with Nexo deposits (old flow via Nestor)
+  // - After cutoff: All Revolut→Nestor = revtag (Nexo via direct SWIFT)
+  var CUTOFF_DATE = new Date(2026, 0, 15); // Jan 15, 2026
+  var isBeforeCutoff = (year < 2026) || (year === 2026 && month === 1);
+
   try {
-    Logger.log('[REVOLUT-TO-NESTOR] Fetching transfers for %s-%s', month, year);
+    Logger.log('[REVOLUT-TO-NESTOR] Fetching transfers for %s-%s (cutoff logic: %s)', month, year, isBeforeCutoff ? 'OLD' : 'NEW');
     var revolutToNestor = getRevolutToNestorTransfers_(month, year);
     if (revolutToNestor && revolutToNestor.length > 0) {
       var rawTotal = revolutToNestor.reduce(function(sum, tx) { return sum + tx.amount; }, 0);
 
-      result.breakdown.revolutToNestor.transfers = revolutToNestor.length;
-      result.breakdown.revolutToNestor.total = rawTotal;  // Full amount counts as revtag
-      result.breakdown.revolutToNestor.rawTotal = rawTotal;
-      result.breakdown.revolutToNestor.nexoTransfers = 0;  // No longer subtracting Nexo
-      result.details.revolutToNestor = revolutToNestor;
-      result.totalExpenses += rawTotal;
+      var nexoTransferTotal = 0;
+      var actualExpenses = rawTotal;
 
-      Logger.log('[REVOLUT-TO-NESTOR] %s-%s: %s transfers, Total revtag $%s (all counted as expenses)',
-        month, year, result.breakdown.revolutToNestor.transfers, rawTotal.toFixed(2));
+      if (isBeforeCutoff) {
+        // OLD LOGIC: Subtract Nexo deposits (transfers went via Nestor to Nexo)
+        nexoTransferTotal = getRevolutToNexoAmount_(month, year);
+        actualExpenses = rawTotal - nexoTransferTotal;
+        Logger.log('[REVOLUT-TO-NESTOR] %s-%s: OLD LOGIC - Raw $%s, Nexo $%s, Revtag $%s',
+          month, year, rawTotal.toFixed(2), nexoTransferTotal.toFixed(2), actualExpenses.toFixed(2));
+      } else {
+        // NEW LOGIC: All transfers count as revtag (Nexo comes via direct SWIFT)
+        Logger.log('[REVOLUT-TO-NESTOR] %s-%s: NEW LOGIC - All $%s counts as revtag',
+          month, year, rawTotal.toFixed(2));
+      }
+
+      result.breakdown.revolutToNestor.transfers = revolutToNestor.length;
+      result.breakdown.revolutToNestor.total = actualExpenses;
+      result.breakdown.revolutToNestor.rawTotal = rawTotal;
+      result.breakdown.revolutToNestor.nexoTransfers = nexoTransferTotal;
+      result.details.revolutToNestor = revolutToNestor;
+      result.totalExpenses += actualExpenses;
     }
   } catch(e) {
     Logger.log('[ERROR] Revolut-to-Nestor transfers %s-%s: %s', month, year, e.message);
@@ -302,20 +318,30 @@ function updateMonthlyExpenses(month, year) {
   }
   
   // ===== REVOLUT-TO-NESTOR TRANSFERS (revtag) =====
-  // NEW LOGIC (Jan 2026+): All Revolut→Nestor transfers count as expenses (revtag)
-  // Nexo deposits now come via direct SWIFT from Revolut Business, not through Nestor
+  // CUTOFF: Jan 15, 2026
+  // - Before cutoff: Match with Nexo deposits (old flow via Nestor)
+  // - After cutoff: All Revolut→Nestor = revtag (Nexo via direct SWIFT)
+  var isBeforeCutoff = (year < 2026) || (year === 2026 && month === 1);
   var revolutToNestor = getRevolutToNestorTransfers_(month, year);
   var totalToNestor = 0;
   if (revolutToNestor && revolutToNestor.length > 0) {
     var rawTotal = revolutToNestor.reduce(function(sum, tx) { return sum + tx.amount; }, 0);
 
-    totalToNestor = rawTotal;  // Full amount counts as revtag
+    if (isBeforeCutoff) {
+      // OLD LOGIC: Subtract Nexo deposits
+      var nexoTransferTotal = getRevolutToNexoAmount_(month, year);
+      totalToNestor = rawTotal - nexoTransferTotal;
+      Logger.log('[REVOLUT-TO-NESTOR] Month %s-%s: OLD LOGIC - Raw $%s, Nexo $%s, Revtag $%s',
+        month, year, rawTotal.toFixed(2), nexoTransferTotal.toFixed(2), totalToNestor.toFixed(2));
+    } else {
+      // NEW LOGIC: All transfers count as revtag
+      totalToNestor = rawTotal;
+      Logger.log('[REVOLUT-TO-NESTOR] Month %s-%s: NEW LOGIC - All $%s counts as revtag',
+        month, year, rawTotal.toFixed(2));
+    }
     totalCardExpenses += totalToNestor;
-
-    Logger.log('[REVOLUT-TO-NESTOR] Month %s-%s: Total revtag $%s (%s transactions, all counted as expenses)',
-      month, year, rawTotal.toFixed(2), revolutToNestor.length);
   }
-  
+
   // ===== BUILD NOTES USING HELPER FUNCTION =====
   var noteDetails = buildMonthlyExpensesNotes_(me, ae, re, totalToNestor);
   
@@ -434,12 +460,18 @@ function testMonthlyExpenses(month, year) {
   }
 
   // Add Revolut-to-Nestor transfers (revtag)
-  // NEW LOGIC (Jan 2026+): All Revolut→Nestor transfers count as expenses (revtag)
+  // CUTOFF: Jan 15, 2026 - before: match Nexo, after: all = revtag
+  var isBeforeCutoff = (year < 2026) || (year === 2026 && month === 1);
   var revolutToNestor = getRevolutToNestorTransfers_(month, year);
   var totalToNestor = 0;
   if (revolutToNestor && revolutToNestor.length > 0) {
     var rawTotal = revolutToNestor.reduce(function(sum, tx) { return sum + tx.amount; }, 0);
-    totalToNestor = rawTotal;  // Full amount counts as revtag
+    if (isBeforeCutoff) {
+      var nexoTransferTotal = getRevolutToNexoAmount_(month, year);
+      totalToNestor = rawTotal - nexoTransferTotal;
+    } else {
+      totalToNestor = rawTotal;
+    }
     totalCardExpenses += totalToNestor;
   }
 
