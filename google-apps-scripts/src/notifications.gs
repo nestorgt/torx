@@ -329,11 +329,13 @@ function generateDailyWeeklySummary() {
       currentDate.setDate(currentDate.getDate() + 1);
     }
 
-    Logger.log('[SUMMARY] Week total farmed: $%s', weekMetrics.farmed);
+    Logger.log('[SUMMARY] Week total farmed: $%s, payouts: $%s', weekMetrics.farmed, weekMetrics.payouts);
     summary.weekCurrent = weekMetrics;
-    // For pendingPayouts week: use payouts delta only (not pending, since pending is a current balance not accumulated)
-    // pending is the current pending amount in G21, not something that should be summed over days
-    summary.weekCurrent.pendingPayouts = summary.weekCurrent.payouts;
+    // For pendingPayouts week: current pending (G21) + sum of payouts this week
+    var currentPending = Number(sheet.getRange('G21').getValue()) || 0;
+    summary.weekCurrent.pendingPayouts = currentPending + summary.weekCurrent.payouts;
+    Logger.log('[SUMMARY] Week pendingPayouts: $%s (pending $%s + week payouts $%s)',
+      summary.weekCurrent.pendingPayouts, currentPending, summary.weekCurrent.payouts);
 
     // Week comparison: compare current week total vs previous week's total
     var prevWeekMetrics = createEmptyMetrics();
