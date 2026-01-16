@@ -315,6 +315,39 @@ function deleteSnapshot(dateStr) {
   }
 }
 
+function viewAllSnapshots() {
+  /**
+   * View all stored snapshots for debugging
+   * Run this from Apps Script editor to see what's stored
+   */
+  try {
+    var properties = PropertiesService.getScriptProperties();
+    var snapshotsJson = properties.getProperty('daily_snapshot_collection');
+
+    if (!snapshotsJson) {
+      Logger.log('[VIEW] No snapshots collection found');
+      return 'No snapshots found';
+    }
+
+    var snapshots = JSON.parse(snapshotsJson);
+    var dates = Object.keys(snapshots).sort();
+
+    Logger.log('[VIEW] Found %s snapshots:', dates.length);
+
+    for (var i = 0; i < dates.length; i++) {
+      var date = dates[i];
+      var snap = snapshots[date];
+      Logger.log('[VIEW] %s: balance=$%s, expenses=$%s, farmed=$%s, payouts=$%s',
+        date, snap.balance, snap.expenses, snap.farmed, snap.payouts);
+    }
+
+    return JSON.stringify(snapshots, null, 2);
+  } catch (e) {
+    Logger.log('[ERROR] Failed to view snapshots: %s', e.message);
+    return 'Error: ' + e.message;
+  }
+}
+
 function clearAllSnapshotData() {
   try {
     var properties = PropertiesService.getScriptProperties();
