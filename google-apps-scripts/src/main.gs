@@ -159,7 +159,7 @@ function getCurrentMonthStatus() {
       for (var col = 2; col <= lastColumn; col++) {
         var userName = usersSheet.getRange(1, col).getValue();
         var isActive = toBool_(usersSheet.getRange(28, col).getValue());
-        var monthlyAmount = Number(usersSheet.getRange(29, col).getValue()) || 0;
+        var monthlyAmount = Number(usersSheet.getRange(USERS_SALARY_ROW, col).getValue()) || 0;
         var paidAmount = usersSheet.getRange(monthRow, col).getValue();
 
         if (isActive && monthlyAmount > 0) {

@@ -17,6 +17,8 @@ var TS_CELL = 'A1';                   // Timestamp cell for payouts
 var CURRENT_TIMEZONE = 'Europe/Madrid';
 var USERS_FIRST_MONTH_ROW = 30;       // First month row for user payments
 var USERS_FIRST_COLUMN = 2;           // First user column (column B)
+var USERS_SALARY_ROW = 29;            // Monthly salary row
+var USERS_BONUS_COLUMN = 4;           // Column D: Bonus column for T2 (1% of profits per month row)
 
 /* ============== Cell Mapping ============== */
 // Note: Wise and Nexo removed from balance tracking (not counted towards total)

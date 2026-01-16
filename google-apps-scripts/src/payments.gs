@@ -181,6 +181,7 @@ function dryRunPayUsersForMonth(monthStr) {
       var amount = userData[1];
       var currency = userData[2];
       var accountIdentifier = userData[3];
+      var paymentType = userData[4] || 'salary';
 
       totalEur += amount;
 
@@ -188,10 +189,11 @@ function dryRunPayUsersForMonth(monthStr) {
         name: userName,
         amount: amount,
         currency: currency,
-        recipient: accountIdentifier
+        recipient: accountIdentifier,
+        type: paymentType
       });
 
-      Logger.log('[DRY_RUN] Would pay: %s -> €%s to %s', userName, amount, accountIdentifier);
+      Logger.log('[DRY_RUN] Would pay %s: %s -> €%s to %s', paymentType.toUpperCase(), userName, amount, accountIdentifier);
     }
 
     // Estimate USD equivalent (rough estimate at 1.08 EUR/USD)
@@ -293,16 +295,17 @@ function payUsersForMonth(monthStr) {
     // Process each user payment
     for (var i = 0; i < paymentData.length; i++) {
       var userData = paymentData[i];
-      var userName = userData[0]; // Column A: User name
-      var amount = userData[1];   // Column B: Amount
-      var currency = userData[2]; // Column C: Currency (USD/EUR)
-      var accountName = userData[3]; // Column D: Account name
-      
-      Logger.log('[PAY_USERS] Processing payment: %s -> %s %s %s', userName, amount, currency, accountName);
-      
+      var userName = userData[0];     // User ID
+      var amount = userData[1];       // Amount
+      var currency = userData[2];     // Currency (USD/EUR)
+      var accountName = userData[3];  // Account name
+      var paymentType = userData[4] || 'salary';  // 'salary' or 'bonus'
+
+      Logger.log('[PAY_USERS] Processing %s payment: %s -> %s %s %s', paymentType, userName, amount, currency, accountName);
+
       try {
-        var paymentResult = processUserPayment_(userName, amount, currency, accountName, monthStr);
-        
+        var paymentResult = processUserPayment_(userName, amount, currency, accountName, monthStr, paymentType);
+
         if (paymentResult.success) {
           results.successfulPayments++;
           results.totalUsdFromMain += paymentResult.usdAmount;
@@ -311,24 +314,25 @@ function payUsersForMonth(monthStr) {
             amount: amount,
             currency: currency,
             account: accountName,
+            type: paymentType,
             status: 'sent',
             transactionId: paymentResult.transactionId,
             usdAmount: paymentResult.usdAmount,
             exchangeRate: paymentResult.exchangeRate
           });
-          
-          Logger.log('[PAY_USERS] ✅ Payment successful: %s %s to %s (ID: %s)', 
-                     amount, currency, accountName, paymentResult.transactionId);
+
+          Logger.log('[PAY_USERS] ✅ %s payment successful: %s %s to %s (ID: %s)',
+                     paymentType.toUpperCase(), amount, currency, accountName, paymentResult.transactionId);
         } else {
           results.failedPayments++;
-          results.errors.push(userName + ': ' + paymentResult.error);
-          Logger.log('[PAY_USERS] ❌ Payment failed: %s - %s', userName, paymentResult.error);
+          results.errors.push(userName + ' (' + paymentType + '): ' + paymentResult.error);
+          Logger.log('[PAY_USERS] ❌ %s payment failed: %s - %s', paymentType, userName, paymentResult.error);
         }
-        
+
       } catch (e) {
         results.failedPayments++;
-        results.errors.push(userName + ': ' + e.message);
-        Logger.log('[PAY_USERS] ❌ Payment error: %s - %s', userName, e.message);
+        results.errors.push(userName + ' (' + paymentType + '): ' + e.message);
+        Logger.log('[PAY_USERS] ❌ %s payment error: %s - %s', paymentType, userName, e.message);
       }
     }
     
@@ -434,7 +438,8 @@ function menuPaySpecificMonth() {
 
 /**
  * Get payment data for a specific month from Users sheet
- * Returns array of [userName, amount, currency, accountName/phone]
+ * Returns array of [userName, amount, currency, accountName/phone, paymentType]
+ * paymentType: 'salary' or 'bonus'
  */
 function getPaymentDataForMonth_(monthStr) {
   try {
@@ -475,10 +480,10 @@ function getPaymentDataForMonth_(monthStr) {
         continue;
       }
 
-      // Get monthly payment amount (row 29)
-      var monthlyAmount = Number(usersSheet.getRange(29, col).getValue()) || 0;
+      // Get monthly payment amount (row 29 = USERS_SALARY_ROW)
+      var monthlyAmount = Number(usersSheet.getRange(USERS_SALARY_ROW, col).getValue()) || 0;
       if (monthlyAmount <= 0) {
-        Logger.log('[PAYMENT_DATA] Column %s - %s: No payment amount (row 29 = %s)', col, userId, usersSheet.getRange(29, col).getValue());
+        Logger.log('[PAYMENT_DATA] Column %s - %s: No payment amount (row %s = %s)', col, userId, USERS_SALARY_ROW, usersSheet.getRange(USERS_SALARY_ROW, col).getValue());
         continue;
       }
 
@@ -493,11 +498,24 @@ function getPaymentDataForMonth_(monthStr) {
       // Currency is always EUR for user payments (target accounts are EUR)
       var currency = 'EUR';
 
-      paymentData.push([userId, monthlyAmount, currency, userId]);
-      Logger.log('[PAYMENT_DATA] Added user: %s -> €%s', userId, monthlyAmount);
+      // Add salary payment
+      paymentData.push([userId, monthlyAmount, currency, userId, 'salary']);
+      Logger.log('[PAYMENT_DATA] Added salary: %s -> €%s', userId, monthlyAmount);
     }
 
-    Logger.log('[PAYMENT_DATA] Found %s users to pay for %s', paymentData.length, monthStr);
+    // Check for bonus in column D (USERS_BONUS_COLUMN) for the month row
+    // This is the 1% of profits bonus - only T2 has this currently
+    var bonusAmount = Number(usersSheet.getRange(monthRow, USERS_BONUS_COLUMN).getValue()) || 0;
+    if (bonusAmount > 0) {
+      // Get the user ID for the bonus column (should be the user who gets bonuses)
+      var bonusUserId = String(usersSheet.getRange(1, USERS_BONUS_COLUMN).getValue() || '').trim();
+      if (bonusUserId) {
+        paymentData.push([bonusUserId, bonusAmount, 'EUR', bonusUserId, 'bonus']);
+        Logger.log('[PAYMENT_DATA] Added bonus for %s: €%s (1%% of profits)', bonusUserId, bonusAmount);
+      }
+    }
+
+    Logger.log('[PAYMENT_DATA] Found %s payments to process for %s', paymentData.length, monthStr);
     return paymentData;
 
   } catch (e) {
@@ -508,19 +526,26 @@ function getPaymentDataForMonth_(monthStr) {
 
 /**
  * Process individual user payment
+ * paymentType: 'salary' or 'bonus'
  */
-function processUserPayment_(userName, amount, targetCurrency, accountIdentifier, monthStr) {
-  Logger.log('[USER_PAYMENT] Processing: %s %s %s to %s (%s)', amount, targetCurrency, accountIdentifier, userName, monthStr);
+function processUserPayment_(userName, amount, targetCurrency, accountIdentifier, monthStr, paymentType) {
+  paymentType = paymentType || 'salary';
+  Logger.log('[USER_PAYMENT] Processing %s: %s %s %s to %s (%s)', paymentType, amount, targetCurrency, accountIdentifier, userName, monthStr);
 
   try {
     // Create transfer request via proxy
-    var requestId = nowStamp_().replace(/[^0-9]/g, '') + '-' + userName.replace(/[^a-zA-Z0-9]/g, '');
+    var requestId = nowStamp_().replace(/[^0-9]/g, '') + '-' + userName.replace(/[^a-zA-Z0-9]/g, '') + '-' + paymentType;
+
+    // Build reference based on payment type
+    var reference = paymentType === 'bonus'
+      ? 'Bonus 1% ' + monthStr + ' - ' + userName
+      : 'Payment ' + monthStr + ' - ' + userName;
 
     var payload = {
       toName: accountIdentifier,
       amount: amount,
       currency: targetCurrency,
-      reference: 'Payment ' + monthStr + ' - ' + userName,
+      reference: reference,
       request_id: requestId
     };
 
